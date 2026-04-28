@@ -1,0 +1,227 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Country {
+  id       String   @id @default(cuid())
+  name     String   @unique
+  counties County[]
+}
+
+model County {
+  id            String         @id @default(cuid())
+  name          String         @unique
+  countryId     String?
+  country       Country?       @relation(fields: [countryId], references: [id], onDelete: SetNull)
+  markets       Market[]
+  allowedEmails AllowedEmail[]
+  routes        Route[]
+}
+
+model Market {
+  id       String        @id @default(cuid())
+  name     String
+  countyId String
+  county   County        @relation(fields: [countyId], references: [id], onDelete: Cascade)
+  prices   MarketPrice[]
+
+  @@unique([name, countyId])
+}
+
+model Item {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  unitMeasure String        @default("kg")
+  type        String        @default("commodity") // commodity | labour
+  prices      MarketPrice[]
+}
+
+model MarketPrice {
+  id        String   @id @default(cuid())
+  marketId  String
+  market    Market   @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  price     Int
+  prevPrice Int?
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@unique([marketId, itemId])
+}
+
+model Route {
+  id        String   @id @default(cuid())
+  from      String
+  to        String
+  countyId  String?
+  county    County?  @relation(fields: [countyId], references: [id], onDelete: SetNull)
+  fares     Fare[]
+  createdAt DateTime @default(now())
+
+  @@unique([from, to, countyId])
+}
+
+model Fare {
+  id            String   @id @default(cuid())
+  routeId       String
+  route         Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  amount        Int
+  transportType String   @default("psv") // psv | bike | other
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([routeId, transportType])
+}
+
+model AllowedEmail {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  countyId String?
+  county   County? @relation(fields: [countyId], references: [id], onDelete: SetNull)
+}
+
+model UserProfile {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  fullName           String?
+  tel                String?
+  mpesaNumber        String?
+  kraPin             String?
+  idNumber           String?
+  idFrontUrl         String?
+  idBackUrl          String?
+  selfieUrl          String?
+  verificationStatus String   @default("NONE") // NONE | PENDING | VERIFIED | REJECTED
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model DropShipItem {
+  id              String         @id @default(cuid())
+  orgName         String
+  description     String
+  location        String
+  tel             String
+  date            DateTime
+  target          String         @default("NATIONAL")
+  targetCountyIds String[]
+  fileName        String
+  fileData        Bytes?
+  fileMime        String
+  fileUrl         String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  sales           DropShipSale[]
+}
+
+model DropShipSale {
+  id             String       @id @default(cuid())
+  dropShipItemId String
+  dropShipItem   DropShipItem @relation(fields: [dropShipItemId], references: [id], onDelete: Cascade)
+  mpesaNumber    String
+  commMethod     String       // sms | whatsapp | email | call
+  fileUrl        String?
+  status         String       @default("PENDING") // PENDING | REVIEWED | PROCESSED | PAID
+  agentNotes     String?
+  adminNotes     String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+}
+
+model News {
+  id          String   @id @default(cuid())
+  title       String
+  description String
+  fileUrl     String?
+  category    String   @default("general") // security | jobs | opportunities | general
+  publishedAt DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Challenge {
+  id              String                @id @default(cuid())
+  payments        MpesaPayment[]
+  orgName         String
+  tel             String
+  description     String
+  repostUrl       String
+  platforms       String[]
+  mpesaNo         String
+  closingTime     DateTime
+  paymentTime     DateTime
+  targetCount     Int
+  ranges          Json
+  target          String                @default("NATIONAL")
+  targetCountyIds String[]
+  published       Boolean               @default(false)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  submissions     ChallengeSubmission[]
+}
+
+model MpesaPayment {
+  id             String       @id @default(cuid())
+  checkoutId     String       @unique
+  status         String       // success | failed | cancelled | pending
+  resultCode     String?
+  resultDesc     String?
+  mpesaRef       String?
+  amount         Float?
+  phone          String?
+  challengeId    String?
+  challenge      Challenge?   @relation(fields: [challengeId], references: [id], onDelete: SetNull)
+  needRequestId  String?
+  needRequest    NeedRequest? @relation(fields: [needRequestId], references: [id], onDelete: SetNull)
+  createdAt      DateTime     @default(now())
+}
+
+model NeedRequest {
+  id              String               @id @default(cuid())
+  name            String
+  description     String
+  commMethod      String               // sms | whatsapp | email | call
+  phone           String
+  mpesaNumber     String?
+  whatsappNumber  String?
+  trackingNumber  String?              @unique
+  status          String               @default("SUBMITTED")
+  // SUBMITTED | REVIEWED | PAID | IN_PROGRESS | AWAITING_FEEDBACK | DELIVERED
+  agentComments   String?
+  requestedAmount Int?
+  clientFeedback  String?
+  payments        MpesaPayment[]
+  updates         NeedRequestUpdate[]
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+}
+
+model NeedRequestUpdate {
+  id            String      @id @default(cuid())
+  needRequestId String
+  needRequest   NeedRequest @relation(fields: [needRequestId], references: [id], onDelete: Cascade)
+  message       String
+  createdAt     DateTime    @default(now())
+}
+
+model ChallengeSubmission {
+  id           String    @id @default(cuid())
+  challengeId  String
+  challenge    Challenge @relation(fields: [challengeId], references: [id], onDelete: Cascade)
+  mpesaNo      String
+  submitUrl    String
+  platform     String
+  status       String    @default("PENDING")
+  rejectReason String?
+  consentGiven Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([challengeId, mpesaNo, platform])
+}
