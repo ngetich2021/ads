@@ -12,12 +12,13 @@ import {
   createDropShipItem, updateDropShipItem, deleteDropShipItem,
   createChallenge, updateChallenge, deleteChallenge, toggleChallengePublished,
   getSubmissions, approveSubmission, rejectSubmission,
-  createRoute, deleteRoute, upsertFare, deleteFare,
+  createRoute, deleteRoute, upsertFare, deleteFare, extendChallenge,
   createNews, updateNews, deleteNews,
   updateDropShipSaleAdmin,
   updateVerificationStatus,
   updateAgentRoles,
   type NeedRequestInfo,
+  type MarketInfo,
 } from '@/app/market/actions'
 import NeedRequestsPanel from './NeedRequestsPanel'
 import AgentVerificationModal from './AgentVerificationModal'
@@ -47,7 +48,7 @@ type Props = {
   agentVerifications: AgentVerificationInfo[]
   userCountyId: string | null
   userRoles: string[]
-  userCountyIds: string[]
+  userMarketIds: string[]
   userProfile: UserProfileInfo | null
   user: User
 }
@@ -71,20 +72,18 @@ function deviation(price: number, prev: number | null) {
 export default function DashboardClient({
   countries, counties, items, prices, allowedEmails, dropShipItems, challenges, needRequests,
   routes, news, dropShipSales, agentVerifications,
-  userCountyId, userRoles, userCountyIds, userProfile, user,
+  userCountyId, userRoles, userMarketIds, userProfile, user,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
   const isAdmin = userCountyId === null
   const hasRole = (role: string) => isAdmin || userRoles.includes(role)
 
-  // Counties the agent is allowed to manage (union of countyId + countyIds)
-  const agentCountyIds = (() => {
-    const ids = new Set<string>(userCountyIds)
-    if (userCountyId) ids.add(userCountyId)
-    return [...ids]
-  })()
-  const agentCounties = !isAdmin ? counties.filter(c => agentCountyIds.includes(c.id)) : counties
+  // Counties that contain at least one of the agent's assigned markets
+  const agentMarketIds = new Set(userMarketIds)
+  const agentCounties = !isAdmin
+    ? counties.filter(c => c.markets.some(m => agentMarketIds.has(m.id)))
+    : counties
 
   const kenyaId = countries.find((c) => c.name === 'Kenya')?.id ?? countries[0]?.id ?? ''
   const defaultCountyId = (() => {
@@ -97,7 +96,9 @@ export default function DashboardClient({
   const [selectedCountyId, setSelectedCountyId] = useState(defaultCountyId)
   const [selectedMarketId, setSelectedMarketId] = useState(() => {
     const county = counties.find((c) => c.id === defaultCountyId)
-    return county?.markets[0]?.id ?? ''
+    const markets = county?.markets ?? []
+    const first = !isAdmin ? markets.find(m => agentMarketIds.has(m.id)) : markets[0]
+    return first?.id ?? markets[0]?.id ?? ''
   })
   const [modal, setModal] = useState<ModalMode | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -141,7 +142,9 @@ export default function DashboardClient({
       : counties
 
   const selectedCounty = counties.find((c) => c.id === selectedCountyId)
-  const marketsInCounty = selectedCounty?.markets ?? []
+  const marketsInCounty = (selectedCounty?.markets ?? []).filter(
+    m => isAdmin || agentMarketIds.has(m.id)
+  )
 
   const [prevCountyId, setPrevCountyId] = useState(selectedCountyId)
   if (prevCountyId !== selectedCountyId) {
@@ -774,20 +777,26 @@ function AgentRoleEditor({ emailEntry, counties, onDone }: {
 }) {
   const [open, setOpen] = useState(false)
   const [selectedRoles, setSelectedRoles] = useState<string[]>(emailEntry.roles)
-  const [selectedCounties, setSelectedCounties] = useState<string[]>(emailEntry.countyIds)
+  const [selectedMarkets, setSelectedMarkets] = useState<string[]>(emailEntry.marketIds)
+  const [expandedCounty, setExpandedCounty] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
 
   const toggleRole = (v: string) =>
     setSelectedRoles(prev => prev.includes(v) ? prev.filter(r => r !== v) : [...prev, v])
-  const toggleCounty = (id: string) =>
-    setSelectedCounties(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
+  const toggleMarket = (id: string) =>
+    setSelectedMarkets(prev => prev.includes(id) ? prev.filter(m => m !== id) : [...prev, id])
+  const toggleCountyAll = (markets: MarketInfo[]) => {
+    const ids = markets.map(m => m.id)
+    const allOn = ids.every(id => selectedMarkets.includes(id))
+    setSelectedMarkets(prev => allOn ? prev.filter(id => !ids.includes(id)) : [...new Set([...prev, ...ids])])
+  }
 
   const handleSave = () => {
     setError(null); setSaved(false)
     startTransition(async () => {
-      const r = await updateAgentRoles(emailEntry.id, selectedRoles, selectedCounties)
+      const r = await updateAgentRoles(emailEntry.id, selectedRoles, selectedMarkets)
       if (r.success) { setSaved(true); setOpen(false); onDone() }
       else setError(r.error)
     })
@@ -804,6 +813,11 @@ function AgentRoleEditor({ emailEntry, counties, onDone }: {
           ))
           : <span className="text-[10px] text-gray-400 italic">No roles assigned</span>
         }
+        {emailEntry.marketIds.length > 0 && (
+          <span className="text-[10px] text-gray-500 ml-1">
+            · {emailEntry.marketIds.length} market{emailEntry.marketIds.length !== 1 ? 's' : ''}
+          </span>
+        )}
         <button onClick={() => setOpen(v => !v)}
           className="rounded-full border border-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-500 hover:border-violet-300 hover:text-violet-700 transition-colors ml-1">
           {open ? 'Close' : 'Assign Roles'}
@@ -823,21 +837,53 @@ function AgentRoleEditor({ emailEntry, counties, onDone }: {
             </div>
           </div>
           <div>
-            <p className="text-xs font-semibold text-gray-500 mb-1.5">Allowed Counties</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-36 overflow-y-auto">
-              {counties.map(c => (
-                <label key={c.id} className="flex items-center gap-1.5 cursor-pointer">
-                  <input type="checkbox" checked={selectedCounties.includes(c.id)} onChange={() => toggleCounty(c.id)} className="accent-violet-600 rounded" />
-                  <span className="text-xs text-gray-700 truncate">{c.name}</span>
-                </label>
-              ))}
+            <p className="text-xs font-semibold text-gray-500 mb-1">
+              Allowed Markets <span className="font-normal text-gray-400">({selectedMarkets.length} selected)</span>
+            </p>
+            <div className="max-h-52 overflow-y-auto space-y-1 pr-1">
+              {counties.filter(c => c.markets.length > 0).map(county => {
+                const mids = county.markets.map(m => m.id)
+                const selCount = mids.filter(id => selectedMarkets.includes(id)).length
+                const isExpanded = expandedCounty === county.id
+                return (
+                  <div key={county.id} className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                    <button type="button"
+                      onClick={() => setExpandedCounty(prev => prev === county.id ? null : county.id)}
+                      className="w-full flex items-center justify-between px-3 py-1.5 text-left hover:bg-gray-50">
+                      <span className="text-xs font-semibold text-gray-700">{county.name}</span>
+                      <span className="text-[10px] text-gray-400">
+                        {selCount > 0 ? `${selCount}/${county.markets.length}` : county.markets.length} {isExpanded ? '▴' : '▾'}
+                      </span>
+                    </button>
+                    {isExpanded && (
+                      <div className="px-3 pb-2 pt-1 border-t border-gray-100 space-y-1">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-[10px] text-gray-400 mb-1">
+                          <input type="checkbox"
+                            checked={mids.every(id => selectedMarkets.includes(id))}
+                            onChange={() => toggleCountyAll(county.markets)}
+                            className="accent-violet-600 rounded" />
+                          Select all in {county.name}
+                        </label>
+                        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+                          {county.markets.map(m => (
+                            <label key={m.id} className="flex items-center gap-1.5 cursor-pointer">
+                              <input type="checkbox" checked={selectedMarkets.includes(m.id)} onChange={() => toggleMarket(m.id)} className="accent-violet-600 rounded" />
+                              <span className="text-[11px] text-gray-700 truncate">{m.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
           {error && <p className="text-xs text-red-500">{error}</p>}
           {saved && <p className="text-xs text-emerald-600 font-semibold">Saved ✓</p>}
           <button onClick={handleSave} disabled={isPending}
             className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-4 py-1.5 text-xs font-bold text-white disabled:opacity-60 transition-all">
-            {isPending ? 'Saving…' : 'Save Roles'}
+            {isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
       )}
@@ -931,7 +977,7 @@ function EmailAccessPanel({
                 </div>
                 {e.countyId !== null && (
                   <AgentRoleEditor
-                    key={`${e.id}|${e.roles.join(',')}|${e.countyIds.join(',')}`}
+                    key={`${e.id}|${e.roles.join(',')}|${e.marketIds.join(',')}`}
                     emailEntry={e} counties={counties} onDone={onDone}
                   />
                 )}
@@ -1357,7 +1403,7 @@ function ChallengeForm({
   challenge?: ChallengeInfo
   isPending: boolean
   error: string | null
-  onSubmit: (e: React.SyntheticEvent<HTMLFormElement>) => void
+  onSubmit: (fd: FormData) => void
   onCancel: () => void
   isAdd: boolean
 }) {
@@ -1390,7 +1436,7 @@ function ChallengeForm({
       formData.set(`pc_${p}_targetCount`, draft.targetCount)
       draft.ranges.forEach((r) => { formData.append(`pc_${p}_rangeCount`, r.count); formData.append(`pc_${p}_rangeAmount`, r.amount) })
     })
-    onSubmit({ ...e, currentTarget: { ...e.currentTarget, _formData: formData } } as unknown as React.SyntheticEvent<HTMLFormElement>)
+    onSubmit(formData)
   }
 
   return (
@@ -1659,15 +1705,15 @@ function ChallengePanel({ challenges, onDone }: { challenges: ChallengeInfo[]; o
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detailTab, setDetailTab] = useState<Record<string, 'info' | 'entries' | 'payments'>>({})
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [extendingId, setExtendingId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
 
   function fmtDate(iso: string) {
     return new Date(iso).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
   }
 
-  const handleFormSubmit = (e: React.SyntheticEvent<HTMLFormElement>, isAdd: boolean) => {
-    e.preventDefault(); setError(null)
-    const fd = (e as unknown as { currentTarget: { _formData?: FormData } }).currentTarget._formData ?? new FormData(e.currentTarget)
+  const handleFormSubmit = (fd: FormData, isAdd: boolean) => {
+    setError(null)
     startTransition(async () => {
       const result = isAdd ? await createChallenge(fd) : await updateChallenge(fd)
       if (result.success) { setShowAddForm(false); setEditingItem(null); onDone() }
@@ -1679,6 +1725,19 @@ function ChallengePanel({ challenges, onDone }: { challenges: ChallengeInfo[]; o
     if (!confirm('Delete this challenge and all its submissions?')) return
     setDeletingId(id)
     startTransition(async () => { await deleteChallenge(id); setDeletingId(null); onDone() })
+  }
+
+  const handleExtend = (e: React.SyntheticEvent<HTMLFormElement>, id: string) => {
+    e.preventDefault()
+    const fd = new FormData(e.currentTarget)
+    const closingTime = String(fd.get('closingTime') ?? '')
+    const paymentTime = String(fd.get('paymentTime') ?? '')
+    setError(null)
+    startTransition(async () => {
+      const r = await extendChallenge(id, closingTime, paymentTime)
+      if (r.success) { setExtendingId(null); onDone() }
+      else setError(r.error)
+    })
   }
 
   const handleTogglePublish = (id: string, current: boolean) => {
@@ -1736,7 +1795,7 @@ function ChallengePanel({ challenges, onDone }: { challenges: ChallengeInfo[]; o
       <div className="p-4 space-y-3">
         {showAddForm && !editingItem && (
           <ChallengeForm isAdd isPending={isPending} error={error}
-            onSubmit={(e) => handleFormSubmit(e, true)}
+            onSubmit={(fd) => handleFormSubmit(fd, true)}
             onCancel={() => { setShowAddForm(false); setError(null) }} />
         )}
         {!showAddForm && error && <p className="text-xs text-red-500">{error}</p>}
@@ -1761,13 +1820,47 @@ function ChallengePanel({ challenges, onDone }: { challenges: ChallengeInfo[]; o
               const pool = ch.platformConfigs.reduce((s, pc) => s + totalCost(pc.ranges), 0)
               const paid = ch.payments.filter(p => p.status === 'success').reduce((s, p) => s + (p.amount ?? 0), 0)
 
+              const isClosed = new Date(ch.closingTime) < new Date()
+              const canExtend = isClosed && ch.submissionCount === 0
+
               return (
                 <li key={ch.id} className={`rounded-xl border transition-colors ${isOpen ? 'border-violet-300 bg-violet-50/40' : 'border-gray-200 bg-white hover:border-violet-200'}`}>
                   {editingItem?.id === ch.id ? (
                     <div className="p-3">
                       <ChallengeForm challenge={ch} isAdd={false} isPending={isPending} error={error}
-                        onSubmit={(e) => handleFormSubmit(e, false)}
+                        onSubmit={(fd) => handleFormSubmit(fd, false)}
                         onCancel={() => { setEditingItem(null); setError(null) }} />
+                    </div>
+                  ) : extendingId === ch.id ? (
+                    <div className="p-3 space-y-2">
+                      <p className="text-xs font-bold text-amber-700">Extend Closed Challenge</p>
+                      <form onSubmit={(e) => handleExtend(e, ch.id)} className="space-y-2">
+                        <div className="grid sm:grid-cols-2 gap-2">
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-semibold text-gray-500">New Closing Time <span className="text-red-400">*</span></label>
+                            <input type="datetime-local" name="closingTime" required
+                              defaultValue={new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16)}
+                              className={fieldClass} />
+                          </div>
+                          <div className="flex flex-col gap-1">
+                            <label className="text-[10px] font-semibold text-gray-500">New Payment By <span className="text-red-400">*</span></label>
+                            <input type="datetime-local" name="paymentTime" required
+                              defaultValue={new Date(Date.now() + 9 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16)}
+                              className={fieldClass} />
+                          </div>
+                        </div>
+                        {error && <p className="text-xs text-red-500">{error}</p>}
+                        <div className="flex gap-2">
+                          <button type="submit" disabled={isPending}
+                            className="rounded-lg bg-amber-600 text-white px-3 py-1.5 text-xs font-bold hover:bg-amber-700 disabled:opacity-60">
+                            {isPending ? 'Saving…' : 'Save new times'}
+                          </button>
+                          <button type="button" onClick={() => { setExtendingId(null); setError(null) }}
+                            className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-semibold text-gray-600 hover:bg-gray-50">
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
                     </div>
                   ) : (
                     <>
@@ -1780,17 +1873,26 @@ function ChallengePanel({ challenges, onDone }: { challenges: ChallengeInfo[]; o
                             <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${ch.published ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
                               {ch.published ? 'Live' : 'Draft'}
                             </span>
+                            {isClosed && ch.submissionCount === 0 && (
+                              <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold bg-red-100 text-red-600">Closed · No entries</span>
+                            )}
                           </div>
                           <p className="text-[11px] text-gray-400 truncate">{ch.orgName} · {fmtDate(ch.closingTime)} · {ch.submissionCount} entries · KSh {paid > 0 ? paid.toLocaleString() + ' paid' : pool.toLocaleString() + ' pool'}</p>
                         </div>
                         {/* Quick actions — stop propagation so row click doesn't toggle */}
                         <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+                          {canExtend && (
+                            <button onClick={() => { setExtendingId(ch.id); setEditingItem(null); setShowAddForm(false); setError(null) }}
+                              className="rounded px-2 py-1 text-[10px] font-bold text-amber-600 hover:bg-amber-50 transition-colors">
+                              Extend
+                            </button>
+                          )}
                           <button onClick={() => handleTogglePublish(ch.id, ch.published)}
                             disabled={togglingId === ch.id || isPending}
                             className={`rounded px-2 py-1 text-[10px] font-bold transition-colors disabled:opacity-40 ${ch.published ? 'text-amber-600 hover:bg-amber-50' : 'text-emerald-600 hover:bg-emerald-50'}`}>
                             {togglingId === ch.id ? '…' : ch.published ? 'Unpublish' : 'Publish'}
                           </button>
-                          <button onClick={() => { setEditingItem(ch); setShowAddForm(false); setError(null) }}
+                          <button onClick={() => { setEditingItem(ch); setShowAddForm(false); setExtendingId(null); setError(null) }}
                             className="rounded px-2 py-1 text-[10px] font-bold text-violet-600 hover:bg-violet-50 transition-colors">Edit</button>
                           <button onClick={() => handleDelete(ch.id)} disabled={deletingId === ch.id || isPending}
                             className="rounded px-2 py-1 text-[10px] font-bold text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors">
@@ -2133,6 +2235,120 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
 
 /* ─── News Panel ─────────────────────────────────────────────────── */
 
+function NewsForm({
+  item, counties, isPending, error, onSubmit, onCancel,
+}: {
+  item?: NewsInfo
+  counties: CountyInfo[]
+  isPending: boolean
+  error: string | null
+  onSubmit: (e: React.SyntheticEvent<HTMLFormElement>) => void
+  onCancel: () => void
+}) {
+  const [newsTarget, setNewsTarget] = useState(item?.target ?? 'NATIONAL')
+  const [checkedCounties, setCheckedCounties] = useState<string[]>(item?.targetCountyIds ?? [])
+  const [newsMarketCountyId, setNewsMarketCountyId] = useState('')
+  const [newsMarketId, setNewsMarketId] = useState(item?.marketId ?? '')
+
+  const toggleCounty = (id: string) =>
+    setCheckedCounties(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+
+  const marketsForCounty = counties.find(c => c.id === newsMarketCountyId)?.markets ?? []
+
+  return (
+    <form onSubmit={onSubmit} className="rounded-xl border border-violet-100 bg-violet-50 p-4 space-y-3">
+      {item && <input type="hidden" name="id" value={item.id} />}
+      {item && <input type="hidden" name="existingFileUrl" value={item.fileUrl ?? ''} />}
+      <input type="hidden" name="targetCountyIds" value={checkedCounties.join(',')} />
+      <input type="hidden" name="marketId" value={newsMarketId} />
+      <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">{item ? 'Edit News' : 'New Alert / News'}</p>
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-semibold text-gray-500">Title <span className="text-red-400">*</span></label>
+        <input type="text" name="title" required defaultValue={item?.title ?? ''} placeholder="e.g. Market closure notice" className={fieldClass} />
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-semibold text-gray-500">Description <span className="text-red-400">*</span></label>
+        <textarea name="description" required rows={3} defaultValue={item?.description ?? ''} placeholder="Full details…"
+          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 resize-none transition-all" />
+      </div>
+
+      {/* Target selector */}
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-semibold text-gray-500">Target audience</label>
+        <select name="target" value={newsTarget} onChange={e => { setNewsTarget(e.target.value); setCheckedCounties([]); setNewsMarketId('') }} className={fieldClass}>
+          <option value="NATIONAL">National (everyone)</option>
+          <option value="REGIONAL">Regional (multiple counties)</option>
+          <option value="COUNTY">County (specific county)</option>
+          <option value="MARKET">Market (specific market)</option>
+        </select>
+      </div>
+
+      {/* County checkboxes for REGIONAL / COUNTY */}
+      {(newsTarget === 'REGIONAL' || newsTarget === 'COUNTY') && (
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+          <p className="text-xs font-semibold text-gray-500 mb-2">Select counties <span className="text-red-400">*</span></p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
+            {counties.map(c => (
+              <label key={c.id} className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={checkedCounties.includes(c.id)} onChange={() => toggleCounty(c.id)} className="accent-violet-600 rounded" />
+                <span className="text-xs text-gray-700 truncate">{c.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Market selector for MARKET */}
+      {newsTarget === 'MARKET' && (
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500">County</label>
+            <select value={newsMarketCountyId} onChange={e => { setNewsMarketCountyId(e.target.value); setNewsMarketId('') }} className={fieldClass}>
+              <option value="">— Select county</option>
+              {counties.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500">Market</label>
+            <select value={newsMarketId} onChange={e => setNewsMarketId(e.target.value)} className={fieldClass} disabled={!newsMarketCountyId}>
+              <option value="">— Select market</option>
+              {marketsForCounty.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+        </div>
+      )}
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-semibold text-gray-500">Event Date / Time <span className="text-gray-400 font-normal">(when activity happens)</span></label>
+          <input type="datetime-local" name="eventTime"
+            defaultValue={item ? item.eventTime.slice(0, 16) : new Date().toISOString().slice(0, 16)}
+            className={fieldClass} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-semibold text-gray-500">
+            {item ? <>Replace file <span className="text-gray-400 font-normal">(optional)</span></> : <>Attachment <span className="text-gray-400 font-normal">(PDF or image)</span></>}
+          </label>
+          <input type="file" name="file" accept=".pdf,image/*"
+            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 file:mr-3 file:rounded-lg file:border-0 file:bg-violet-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-violet-700 hover:file:bg-violet-200 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition-all" />
+          {item?.fileUrl && <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">Current attachment</a>}
+        </div>
+      </div>
+      {error && <p className="text-xs text-red-500">{error}</p>}
+      <div className="flex gap-2">
+        <button type="submit" disabled={isPending}
+          className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60 hover:from-violet-500 hover:to-indigo-500 transition-all">
+          {isPending ? 'Saving…' : item ? 'Save changes' : 'Publish'}
+        </button>
+        <button type="button" onClick={onCancel}
+          className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+          Cancel
+        </button>
+      </div>
+    </form>
+  )
+}
+
 function NewsPanel({ news, counties, onDone }: { news: NewsInfo[]; counties: CountyInfo[]; onDone: () => void }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
@@ -2159,109 +2375,19 @@ function NewsPanel({ news, counties, onDone }: { news: NewsInfo[]; counties: Cou
     startTransition(async () => { await deleteNews(id); setDeletingId(null); onDone() })
   }
 
-  const NewsForm = ({ item }: { item?: NewsInfo }) => {
-    const [newsTarget, setNewsTarget] = useState(item?.target ?? 'NATIONAL')
-    const [checkedCounties, setCheckedCounties] = useState<string[]>(item?.targetCountyIds ?? [])
-    const [newsMarketCountyId, setNewsMarketCountyId] = useState('')
-    const [newsMarketId, setNewsMarketId] = useState(item?.marketId ?? '')
-
-    const toggleCounty = (id: string) =>
-      setCheckedCounties(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-
-    const marketsForCounty = counties.find(c => c.id === newsMarketCountyId)?.markets ?? []
-
-    return (
-      <form onSubmit={(e) => handleSubmit(e, !!item)} className="rounded-xl border border-violet-100 bg-violet-50 p-4 space-y-3">
-        {item && <input type="hidden" name="id" value={item.id} />}
-        {item && <input type="hidden" name="existingFileUrl" value={item.fileUrl ?? ''} />}
-        <input type="hidden" name="targetCountyIds" value={checkedCounties.join(',')} />
-        <input type="hidden" name="marketId" value={newsMarketId} />
-        <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">{item ? 'Edit News' : 'New Alert / News'}</p>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">Title <span className="text-red-400">*</span></label>
-          <input type="text" name="title" required defaultValue={item?.title ?? ''} placeholder="e.g. Market closure notice" className={fieldClass} />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">Description <span className="text-red-400">*</span></label>
-          <textarea name="description" required rows={3} defaultValue={item?.description ?? ''} placeholder="Full details…"
-            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 resize-none transition-all" />
-        </div>
-
-        {/* Target selector */}
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">Target audience</label>
-          <select name="target" value={newsTarget} onChange={e => { setNewsTarget(e.target.value); setCheckedCounties([]); setNewsMarketId('') }} className={fieldClass}>
-            <option value="NATIONAL">National (everyone)</option>
-            <option value="REGIONAL">Regional (multiple counties)</option>
-            <option value="COUNTY">County (specific county)</option>
-            <option value="MARKET">Market (specific market)</option>
-          </select>
-        </div>
-
-        {/* County checkboxes for REGIONAL / COUNTY */}
-        {(newsTarget === 'REGIONAL' || newsTarget === 'COUNTY') && (
-          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-            <p className="text-xs font-semibold text-gray-500 mb-2">Select counties <span className="text-red-400">*</span></p>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
-              {counties.map(c => (
-                <label key={c.id} className="flex items-center gap-2 cursor-pointer">
-                  <input type="checkbox" checked={checkedCounties.includes(c.id)} onChange={() => toggleCounty(c.id)} className="accent-violet-600 rounded" />
-                  <span className="text-xs text-gray-700 truncate">{c.name}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Market selector for MARKET */}
-        {newsTarget === 'MARKET' && (
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-500">County</label>
-              <select value={newsMarketCountyId} onChange={e => { setNewsMarketCountyId(e.target.value); setNewsMarketId('') }} className={fieldClass}>
-                <option value="">— Select county</option>
-                {counties.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-500">Market</label>
-              <select value={newsMarketId} onChange={e => setNewsMarketId(e.target.value)} className={fieldClass} disabled={!newsMarketCountyId}>
-                <option value="">— Select market</option>
-                {marketsForCounty.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-            </div>
-          </div>
-        )}
-
-        <div className="grid sm:grid-cols-2 gap-3">
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-gray-500">Event Date / Time <span className="text-gray-400 font-normal">(when activity happens)</span></label>
-            <input type="datetime-local" name="eventTime"
-              defaultValue={item ? item.eventTime.slice(0, 16) : new Date().toISOString().slice(0, 16)}
-              className={fieldClass} />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-gray-500">
-              {item ? <>Replace file <span className="text-gray-400 font-normal">(optional)</span></> : <>Attachment <span className="text-gray-400 font-normal">(PDF or image)</span></>}
-            </label>
-            <input type="file" name="file" accept=".pdf,image/*"
-              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 file:mr-3 file:rounded-lg file:border-0 file:bg-violet-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-violet-700 hover:file:bg-violet-200 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition-all" />
-            {item?.fileUrl && <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">Current attachment</a>}
-          </div>
-        </div>
-        {error && <p className="text-xs text-red-500">{error}</p>}
-        <div className="flex gap-2">
-          <button type="submit" disabled={isPending}
-            className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60 hover:from-violet-500 hover:to-indigo-500 transition-all">
-            {isPending ? 'Saving…' : item ? 'Save changes' : 'Publish'}
-          </button>
-          <button type="button" onClick={() => { setShowAdd(false); setEditingItem(null) }}
-            className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
-            Cancel
-          </button>
-        </div>
-      </form>
-    )
+  function resolveNewsTarget(item: NewsInfo) {
+    if (item.target === 'NATIONAL') {
+      return <span className="inline-flex items-center rounded-full bg-emerald-50 border border-emerald-200 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">National</span>
+    }
+    if (item.target === 'MARKET' && item.marketId) {
+      const county = counties.find(c => c.markets.some(m => m.id === item.marketId))
+      const market = county?.markets.find(m => m.id === item.marketId)
+      const label = county && market ? `${county.name} · ${market.name}` : '—'
+      return <span className="inline-flex items-center rounded-full bg-sky-50 border border-sky-200 px-2 py-0.5 text-[10px] font-semibold text-sky-700">{label}</span>
+    }
+    const names = (item.targetCountyIds ?? []).map(id => counties.find(c => c.id === id)?.name).filter(Boolean)
+    if (names.length === 0) return null
+    return <span className="inline-flex items-center rounded-full bg-violet-50 border border-violet-200 px-2 py-0.5 text-[10px] font-semibold text-violet-700">{names.join(', ')}</span>
   }
 
   return (
@@ -2278,8 +2404,22 @@ function NewsPanel({ news, counties, onDone }: { news: NewsInfo[]; counties: Cou
         )}
       </div>
       <div className="p-5 space-y-4">
-        {showAdd && !editingItem && <NewsForm />}
-        {editingItem && <NewsForm item={editingItem} />}
+        {showAdd && !editingItem && (
+          <NewsForm
+            key="add"
+            counties={counties} isPending={isPending} error={error}
+            onSubmit={(e) => handleSubmit(e, false)}
+            onCancel={() => { setShowAdd(false); setError(null) }}
+          />
+        )}
+        {editingItem && (
+          <NewsForm
+            key={editingItem.id}
+            item={editingItem} counties={counties} isPending={isPending} error={error}
+            onSubmit={(e) => handleSubmit(e, true)}
+            onCancel={() => { setEditingItem(null); setError(null) }}
+          />
+        )}
 
         {news.length === 0 && !showAdd ? (
           <p className="text-sm text-gray-400 text-center py-4">No news items yet.</p>
@@ -2292,6 +2432,9 @@ function NewsPanel({ news, counties, onDone }: { news: NewsInfo[]; counties: Cou
                     <div className="flex items-start gap-2 flex-wrap">
                       <p className="font-semibold text-sm text-gray-800 flex-1">{item.title}</p>
                       <span className="text-xs text-gray-400 shrink-0">Event: {fmtDT(item.eventTime)}</span>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {resolveNewsTarget(item)}
                     </div>
                     <p className="text-xs text-gray-600 line-clamp-2">{item.description}</p>
                     {item.fileUrl && (

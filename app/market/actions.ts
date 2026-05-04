@@ -12,17 +12,16 @@ async function requireAuth(): Promise<{ success: false; error: string } | null> 
   return null
 }
 
-async function requireAgentScope(targetCountyId: string | null): Promise<{ success: false; error: string } | null> {
+async function requireAgentScope(targetMarketId: string | null): Promise<{ success: false; error: string } | null> {
   const session = await auth()
   if (!session?.user?.email) return { success: false, error: 'Not authenticated.' }
   const record = await db.allowedEmail.findUnique({ where: { email: session.user.email } })
-  if (!record) return null // not in allowed list means open access — defer to caller
+  if (!record) return null // not in allowed list — open access
   if (record.countyId === null) return null // global admin — allow all
-  if (!targetCountyId) return null // no county restriction on this resource
-  const allowed = new Set<string>(parseArr(record.countyIds))
-  if (record.countyId) allowed.add(record.countyId)
-  if (!allowed.has(targetCountyId)) {
-    return { success: false, error: 'You do not have permission to manage this county.' }
+  if (!targetMarketId) return null // resource has no market restriction
+  const allowed = new Set<string>(parseArr(record.marketIds))
+  if (!allowed.has(targetMarketId)) {
+    return { success: false, error: 'You do not have permission to manage this market.' }
   }
   return null
 }
@@ -120,7 +119,7 @@ export type ItemInfo = {
 export type AllowedEmailInfo = {
   id: string; email: string
   countyId: string | null; countyName: string | null
-  roles: string[]; countyIds: string[]
+  roles: string[]; marketIds: string[]
 }
 
 export type UserProfileInfo = {
@@ -163,7 +162,11 @@ export async function getAllData(): Promise<{
     }),
     db.item.findMany({ orderBy: { name: 'asc' } }),
     db.marketPrice.findMany({
-      include: { item: true, market: { include: { county: true } } },
+      select: {
+        id: true, price: true, prevPrice: true, updatedAt: true,
+        item: { select: { id: true, name: true, unitMeasure: true, type: true } },
+        market: { select: { id: true, name: true, county: { select: { id: true, name: true } } } },
+      },
       orderBy: { updatedAt: 'desc' },
     }),
   ])
@@ -212,7 +215,7 @@ export async function getAllowedEmails(): Promise<AllowedEmailInfo[]> {
   return rows.map((r) => ({
     id: r.id, email: r.email,
     countyId: r.county?.id ?? null, countyName: r.county?.name ?? null,
-    roles: parseArr(r.roles), countyIds: parseArr(r.countyIds),
+    roles: parseArr(r.roles), marketIds: parseArr(r.marketIds),
   }))
 }
 
@@ -277,9 +280,9 @@ export async function upsertPrice(formData: FormData): Promise<ActionResult> {
   })
   if (!parsed.success) return zodError(parsed.error)
   const { marketId, itemId, price } = parsed.data
-  const market = await db.market.findUnique({ where: { id: marketId }, select: { countyId: true } })
-  if (!market) return { success: false, error: 'Market not found.' }
-  const scopeDenied = await requireAgentScope(market.countyId)
+  if (!(await db.market.findUnique({ where: { id: marketId }, select: { id: true } })))
+    return { success: false, error: 'Market not found.' }
+  const scopeDenied = await requireAgentScope(marketId)
   if (scopeDenied) return scopeDenied
   try {
     const existing = await db.marketPrice.findUnique({ where: { marketId_itemId: { marketId, itemId } } })
@@ -298,9 +301,9 @@ export async function upsertPrice(formData: FormData): Promise<ActionResult> {
 export async function deletePrice(id: string): Promise<ActionResult> {
   const denied = await requireAuth()
   if (denied) return denied
-  const row = await db.marketPrice.findUnique({ where: { id }, include: { market: { select: { countyId: true } } } })
+  const row = await db.marketPrice.findUnique({ where: { id }, select: { marketId: true } })
   if (!row) return { success: false, error: 'Price not found.' }
-  const scopeDenied = await requireAgentScope(row.market.countyId)
+  const scopeDenied = await requireAgentScope(row.marketId)
   if (scopeDenied) return scopeDenied
   try {
     await db.marketPrice.delete({ where: { id } })
@@ -715,7 +718,11 @@ export async function getChallengesAdmin(): Promise<ChallengeInfo[]> {
   const rows = await db.challenge.findMany({
     include: {
       _count: { select: { submissions: true } },
-      payments: { orderBy: { createdAt: 'desc' } },
+      payments: {
+        select: { id: true, checkoutId: true, status: true, mpesaRef: true, amount: true, phone: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+        take: 100,
+      },
     },
     orderBy: { createdAt: 'desc' },
   })
@@ -907,6 +914,32 @@ export async function updateChallenge(formData: FormData): Promise<ActionResult>
     return { success: true }
   } catch {
     return { success: false, error: 'Could not update challenge.' }
+  }
+}
+
+export async function extendChallenge(id: string, closingTime: string, paymentTime: string): Promise<ActionResult> {
+  const denied = await requireAuth()
+  if (denied) return denied
+  const parsed = z.string().min(1).safeParse(id)
+  if (!parsed.success) return { success: false, error: 'Invalid ID.' }
+  if (!closingTime || !paymentTime) return { success: false, error: 'Both times are required.' }
+  const ch = await db.challenge.findUnique({
+    where: { id: parsed.data },
+    select: { closingTime: true, _count: { select: { submissions: true } } },
+  })
+  if (!ch) return { success: false, error: 'Challenge not found.' }
+  if (ch._count.submissions > 0) return { success: false, error: 'Cannot extend a challenge with existing submissions.' }
+  if (new Date(ch.closingTime) > new Date()) return { success: false, error: 'Challenge is still open.' }
+  try {
+    await db.challenge.update({
+      where: { id: parsed.data },
+      data: { closingTime: new Date(closingTime), paymentTime: new Date(paymentTime) },
+    })
+    revalidatePath('/market')
+    revalidatePath('/dashboard')
+    return { success: true }
+  } catch {
+    return { success: false, error: 'Could not extend challenge.' }
   }
 }
 
@@ -1277,12 +1310,7 @@ export async function createRoute(formData: FormData): Promise<ActionResult> {
   const marketId = String(formData.get('marketId') ?? '').trim() || null
   const countyId = String(formData.get('countyId') ?? '').trim() || null
   if (!from || !to) return { success: false, error: 'From and To are required.' }
-  let effectiveCountyId = countyId
-  if (!effectiveCountyId && marketId) {
-    const mkt = await db.market.findUnique({ where: { id: marketId }, select: { countyId: true } })
-    effectiveCountyId = mkt?.countyId ?? null
-  }
-  const scopeDenied = await requireAgentScope(effectiveCountyId)
+  const scopeDenied = await requireAgentScope(marketId)
   if (scopeDenied) return scopeDenied
   try {
     await db.route.create({ data: { from, to, marketId, countyId } })
@@ -1309,12 +1337,8 @@ export async function upsertFare(formData: FormData): Promise<ActionResult> {
   const amount = parseInt(String(formData.get('amount') ?? '0'))
   if (!routeId) return { success: false, error: 'Route is required.' }
   if (!amount || amount < 1) return { success: false, error: 'Fare amount must be a positive number.' }
-  const route = await db.route.findUnique({
-    where: { id: routeId },
-    select: { countyId: true, market: { select: { countyId: true } } },
-  })
-  const routeCountyId = route?.countyId ?? route?.market?.countyId ?? null
-  const scopeDenied = await requireAgentScope(routeCountyId)
+  const route = await db.route.findUnique({ where: { id: routeId }, select: { marketId: true } })
+  const scopeDenied = await requireAgentScope(route?.marketId ?? null)
   if (scopeDenied) return scopeDenied
   try {
     const existing = await db.fare.findUnique({ where: { routeId_transportType: { routeId, transportType } } })
@@ -1331,12 +1355,8 @@ export async function upsertFare(formData: FormData): Promise<ActionResult> {
 export async function deleteFare(id: string): Promise<ActionResult> {
   const denied = await requireAuth()
   if (denied) return denied
-  const fare = await db.fare.findUnique({
-    where: { id },
-    select: { route: { select: { countyId: true, market: { select: { countyId: true } } } } },
-  })
-  const routeCountyId = fare?.route?.countyId ?? fare?.route?.market?.countyId ?? null
-  const scopeDenied = await requireAgentScope(routeCountyId)
+  const fare = await db.fare.findUnique({ where: { id }, select: { route: { select: { marketId: true } } } })
+  const scopeDenied = await requireAgentScope(fare?.route?.marketId ?? null)
   if (scopeDenied) return scopeDenied
   try {
     await db.fare.delete({ where: { id } })
@@ -1434,11 +1454,11 @@ export async function updateNews(formData: FormData): Promise<ActionResult> {
   } catch { return { success: false, error: 'Could not update news item.' } }
 }
 
-export async function updateAgentRoles(id: string, roles: string[], countyIds: string[]): Promise<ActionResult> {
+export async function updateAgentRoles(id: string, roles: string[], marketIds: string[]): Promise<ActionResult> {
   const denied = await requireAuth()
   if (denied) return denied
   try {
-    await db.allowedEmail.update({ where: { id }, data: { roles: jsonArr(roles), countyIds: jsonArr(countyIds) } })
+    await db.allowedEmail.update({ where: { id }, data: { roles: jsonArr(roles), marketIds: jsonArr(marketIds) } })
     revalidatePath('/dashboard')
     return { success: true }
   } catch { return { success: false, error: 'Could not update roles.' } }

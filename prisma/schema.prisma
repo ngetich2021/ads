@@ -90,7 +90,7 @@ model AllowedEmail {
   countyId  String?
   county    County? @relation(fields: [countyId], references: [id], onDelete: SetNull)
   roles     String  @default("[]")
-  countyIds String  @default("[]")
+  marketIds String  @default("[]")
 }
 
 model UserProfile {
