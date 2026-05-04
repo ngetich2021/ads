@@ -35,12 +35,16 @@ export default async function DashboardPage() {
 
   const userRecord = allowedEmails.find((e: { email: string }) => e.email === userEmail)
   const userCountyId = userRecord?.countyId ?? null
+  const userRoles = userRecord?.roles ?? []
+  const userCountyIds = userRecord?.countyIds ?? []
 
   return (
     <DashboardClient
       {...data}
       allowedEmails={allowedEmails}
       userCountyId={userCountyId}
+      userRoles={userRoles}
+      userCountyIds={userCountyIds}
       userProfile={userProfile}
       dropShipItems={dropShipItems}
       challenges={challenges}

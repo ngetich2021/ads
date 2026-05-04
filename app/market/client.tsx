@@ -165,11 +165,18 @@ export default function MarketClient({ countries, counties, items, prices, dropS
   const [activeTab, setActiveTab] = useState<Tab>('commodities')
   const [filtersOpen, setFiltersOpen] = useState(true)
   const [selectedCountryId, setSelectedCountryId] = useState(kenyaId)
-  const [selectedCountyId, setSelectedCountyId] = useState('')
-  const [selectedMarketId, setSelectedMarketId] = useState('')
+  const [selectedCountyId, setSelectedCountyId] = useState(() => {
+    return counties.find(c => c.name === 'Nairobi' && c.countryId === kenyaId)?.id
+      ?? counties.find(c => c.countryId === kenyaId)?.id ?? ''
+  })
+  const [selectedMarketId, setSelectedMarketId] = useState(() => {
+    const nairobi = counties.find(c => c.name === 'Nairobi' && c.countryId === kenyaId)
+      ?? counties.find(c => c.countryId === kenyaId)
+    return nairobi?.markets[0]?.id ?? ''
+  })
   const [selectedItemId, setSelectedItemId] = useState('')
 
-  const activeFilterCount = [selectedCountryId, selectedCountyId, selectedMarketId, selectedItemId].filter(Boolean).length
+  const activeFilterCount = [selectedCountryId, selectedCountyId, selectedMarketId, activeTab === 'commodities' ? selectedItemId : ''].filter(Boolean).length
 
   const visibleCounties = selectedCountryId
     ? counties.filter((c) => c.countryId === selectedCountryId)
@@ -247,92 +254,53 @@ export default function MarketClient({ countries, counties, items, prices, dropS
         <div className="bg-white rounded-t-2xl sm:rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
           <TabBar active={activeTab} onChange={setActiveTab} />
 
-          {/* Commodities filter bar — only shown on commodities tab */}
-          {activeTab === 'commodities' && (
-            <>
-              <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-t border-gray-100">
-                <button
-                  onClick={() => setFiltersOpen((v) => !v)}
-                  className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-violet-700 transition-colors"
-                >
-                  <span className={`transition-transform duration-200 ${filtersOpen ? 'rotate-90' : ''}`}>▶</span>
-                  Filters
-                  {activeFilterCount > 0 && (
-                    <span className="inline-flex items-center rounded-full bg-violet-600 px-2 py-0.5 text-xs font-bold text-white">
-                      {activeFilterCount}
-                    </span>
-                  )}
-                </button>
-
-                <div className="flex items-center gap-2">
-                  {!filtersOpen && selectedItemId && (
-                    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-bold text-white ${itemBadgeColor(items.find(i => i.id === selectedItemId)?.name ?? '')}`}>
-                      {items.find(i => i.id === selectedItemId)?.name}
-                      <button onMouseDown={(e) => e.preventDefault()} onClick={() => setSelectedItemId('')} className="opacity-70 hover:opacity-100">×</button>
-                    </span>
-                  )}
-                  {activeFilterCount > 0 && (
-                    <button
-                      onClick={() => { setSelectedCountryId(''); setSelectedCountyId(''); setSelectedMarketId(''); setSelectedItemId('') }}
-                      className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium"
-                    >
-                      Clear all
-                    </button>
-                  )}
-                  <span className="text-xs text-gray-400 whitespace-nowrap hidden sm:block">
-                    {filtered.length} entr{filtered.length !== 1 ? 'ies' : 'y'}
-                  </span>
-                </div>
-              </div>
-
-              {filtersOpen && (
-                <div className="flex flex-wrap items-center gap-2 sm:gap-3 border-t border-gray-100 px-4 sm:px-5 py-3 sm:py-4">
-                  {countries.length > 0 && (
-                    <select
-                      value={selectedCountryId}
-                      onChange={(e) => {
-                        setSelectedCountryId(e.target.value)
-                        setSelectedCountyId('')
-                        setSelectedMarketId('')
-                      }}
-                      className={selectClass}
-                    >
-                      <option value="">All Countries</option>
-                      {countries.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  )}
-
-                  <select
-                    value={selectedCountyId}
-                    onChange={(e) => { setSelectedCountyId(e.target.value); setSelectedMarketId('') }}
-                    className={selectClass}
-                    disabled={visibleCounties.length === 0}
-                  >
-                    <option value="">All Counties</option>
-                    {visibleCounties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
-
-                  <select
-                    value={selectedMarketId}
-                    onChange={(e) => setSelectedMarketId(e.target.value)}
-                    className={selectClass}
-                    disabled={availableMarkets.length === 0}
-                  >
-                    <option value="">All Markets</option>
-                    {availableMarkets.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  </select>
-
-                  <ProductFilter items={items} value={selectedItemId} onChange={setSelectedItemId} />
-
-                  {selectedMarketId && !selectedItemId && (
-                    <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
-                      <span className="h-1.5 w-1.5 rounded-full bg-violet-500 animate-pulse" />
-                      {availableMarkets.find((m) => m.id === selectedMarketId)?.name}
-                    </span>
-                  )}
-                </div>
+          {/* Always-visible location filter */}
+          <div className="flex items-center justify-between px-4 sm:px-5 py-3 border-t border-gray-100">
+            <button onClick={() => setFiltersOpen(v => !v)}
+              className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-violet-700 transition-colors">
+              <span className={`transition-transform duration-200 ${filtersOpen ? 'rotate-90' : ''}`}>▶</span>
+              Filters
+              {activeFilterCount > 0 && (
+                <span className="inline-flex items-center rounded-full bg-violet-600 px-2 py-0.5 text-xs font-bold text-white">
+                  {activeFilterCount}
+                </span>
               )}
-            </>
+            </button>
+            <div className="flex items-center gap-2">
+              {activeFilterCount > 0 && (
+                <button onClick={() => { setSelectedCountryId(''); setSelectedCountyId(''); setSelectedMarketId(''); setSelectedItemId('') }}
+                  className="text-xs text-gray-400 hover:text-red-500 transition-colors font-medium">
+                  Clear all
+                </button>
+              )}
+              <span className="text-xs text-gray-400 whitespace-nowrap hidden sm:block">
+                {activeTab === 'commodities' ? `${filtered.length} entr${filtered.length !== 1 ? 'ies' : 'y'}` : ''}
+              </span>
+            </div>
+          </div>
+
+          {filtersOpen && (
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 border-t border-gray-100 px-4 sm:px-5 py-3 sm:py-4">
+              {/* Country selector */}
+              {countries.length > 0 && (
+                <select value={selectedCountryId} onChange={(e) => { setSelectedCountryId(e.target.value); setSelectedCountyId(''); setSelectedMarketId('') }} className={selectClass}>
+                  <option value="">All Countries</option>
+                  {countries.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              )}
+              {/* County selector */}
+              <select value={selectedCountyId} onChange={(e) => { setSelectedCountyId(e.target.value); setSelectedMarketId('') }} className={selectClass} disabled={visibleCounties.length === 0}>
+                <option value="">All Counties</option>
+                {visibleCounties.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {/* Market selector */}
+              <select value={selectedMarketId} onChange={e => setSelectedMarketId(e.target.value)} className={selectClass} disabled={availableMarkets.length === 0}>
+                <option value="">All Markets</option>
+                {availableMarkets.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              {/* Product filter — commodities only */}
+              {activeTab === 'commodities' && <ProductFilter items={items} value={selectedItemId} onChange={setSelectedItemId} />}
+            </div>
           )}
         </div>
       </div>
@@ -440,21 +408,44 @@ export default function MarketClient({ countries, counties, items, prices, dropS
         )}
 
         {/* Drop ship tab */}
-        {activeTab === 'drop-ship' && <DropShipSalesTab dropShipItems={dropShipItems} />}
+        {activeTab === 'drop-ship' && (
+          <DropShipSalesTab
+            dropShipItems={dropShipItems}
+            selectedCountyId={selectedCountyId}
+            counties={counties}
+          />
+        )}
 
         {/* Challenge tab */}
-        {activeTab === 'challenge' && <ChallengeTab challenges={challenges} counties={counties} />}
+        {activeTab === 'challenge' && (
+          <ChallengeTab
+            challenges={challenges}
+            counties={counties}
+          />
+        )}
 
         {/* Need tab */}
         {activeTab === 'need' && <NeedTab />}
 
         {/* Fares tab */}
         {activeTab === 'fares' && (
-          <FaresTab routes={routes} counties={counties} selectedCountyId={selectedCountyId} />
+          <FaresTab
+            routes={routes} countries={countries} counties={counties}
+            selectedCountryId={selectedCountryId}
+            selectedCountyId={selectedCountyId}
+            selectedMarketId={selectedMarketId}
+          />
         )}
 
         {/* News tab */}
-        {activeTab === 'news' && <NewsTab news={news} />}
+        {activeTab === 'news' && (
+          <NewsTab
+            news={news}
+            counties={counties}
+            selectedCountyId={selectedCountyId}
+            selectedMarketId={selectedMarketId}
+          />
+        )}
       </main>
 
       {/* Footer */}

@@ -6,20 +6,19 @@ import { uploadBase64 } from '@/app/actions'
 
 const ic = 'w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 bg-white'
 
-type CaptureField = 'selfie' | 'idFront' | 'idBack'
-
-function CameraCapture({ label, captured, onCapture }: {
+function PhotoCapture({ label, captured, onCapture }: {
   label: string
   captured: string | null
   onCapture: (dataUrl: string) => void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [streaming, setStreaming] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [camError, setCamError] = useState<string | null>(null)
 
   const startCamera = useCallback(async () => {
-    setError(null)
+    setCamError(null)
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
       if (videoRef.current) {
@@ -28,7 +27,7 @@ function CameraCapture({ label, captured, onCapture }: {
         setStreaming(true)
       }
     } catch {
-      setError('Camera not accessible. Please allow camera access.')
+      setCamError('Camera not accessible. Use "Choose photo" instead.')
     }
   }, [])
 
@@ -48,19 +47,31 @@ function CameraCapture({ label, captured, onCapture }: {
     canvas.width = video.videoWidth
     canvas.height = video.videoHeight
     canvas.getContext('2d')?.drawImage(video, 0, 0)
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.85)
-    onCapture(dataUrl)
+    onCapture(canvas.toDataURL('image/jpeg', 0.85))
     stopCamera()
   }, [onCapture, stopCamera])
+
+  const handleFile = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const result = ev.target?.result
+      if (typeof result === 'string') onCapture(result)
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }, [onCapture])
 
   return (
     <div className="space-y-2">
       <label className="text-xs font-semibold text-gray-500">{label} <span className="text-red-400">*</span></label>
+
       {captured ? (
         <div className="relative rounded-xl overflow-hidden border border-gray-200">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={captured} alt={label} className="w-full max-h-48 object-cover" />
-          <button type="button" onClick={() => { onCapture(''); startCamera() }}
+          <button type="button" onClick={() => onCapture('')}
             className="absolute top-2 right-2 rounded-full bg-black/60 text-white text-xs px-2 py-1 font-semibold">
             Retake
           </button>
@@ -82,13 +93,24 @@ function CameraCapture({ label, captured, onCapture }: {
           </div>
         </div>
       ) : (
-        <button type="button" onClick={startCamera}
-          className="w-full rounded-xl border-2 border-dashed border-gray-300 py-8 text-center text-sm text-gray-400 hover:border-violet-400 hover:text-violet-500 transition-colors">
-          <span className="block text-2xl mb-1">📷</span>
-          Open camera to take photo
-        </button>
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <button type="button" onClick={startCamera}
+              className="rounded-xl border-2 border-dashed border-gray-300 py-5 text-center text-xs text-gray-400 hover:border-violet-400 hover:text-violet-500 transition-colors">
+              <span className="block text-xl mb-1">📷</span>
+              Use Camera
+            </button>
+            <button type="button" onClick={() => fileInputRef.current?.click()}
+              className="rounded-xl border-2 border-dashed border-gray-300 py-5 text-center text-xs text-gray-400 hover:border-indigo-400 hover:text-indigo-500 transition-colors">
+              <span className="block text-xl mb-1">🖼</span>
+              Choose Photo
+            </button>
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleFile} />
+          {camError && <p className="text-xs text-amber-600">{camError}</p>}
+        </div>
       )}
-      {error && <p className="text-xs text-red-500">{error}</p>}
+
       <canvas ref={canvasRef} className="hidden" />
     </div>
   )
@@ -174,10 +196,10 @@ export default function AgentVerificationModal({ onClose }: { onClose: () => voi
           </div>
 
           <div className="border-t border-gray-100 pt-4 space-y-4">
-            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">📷 Photo Verification — Camera Only (No File Upload)</p>
-            <CameraCapture label="Selfie (Face clearly visible)" captured={selfie} onCapture={(d) => setSelfie(d || null)} />
-            <CameraCapture label="National ID — Front" captured={idFront} onCapture={(d) => setIdFront(d || null)} />
-            <CameraCapture label="National ID — Back" captured={idBack} onCapture={(d) => setIdBack(d || null)} />
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wide">📷 Photo Verification</p>
+            <PhotoCapture label="Selfie (Face clearly visible)" captured={selfie} onCapture={(d) => setSelfie(d || null)} />
+            <PhotoCapture label="National ID — Front" captured={idFront} onCapture={(d) => setIdFront(d || null)} />
+            <PhotoCapture label="National ID — Back" captured={idBack} onCapture={(d) => setIdBack(d || null)} />
           </div>
 
           {error && <p className="text-xs text-red-500 font-medium">{error}</p>}

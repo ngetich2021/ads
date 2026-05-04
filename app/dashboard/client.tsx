@@ -16,6 +16,7 @@ import {
   createNews, updateNews, deleteNews,
   updateDropShipSaleAdmin,
   updateVerificationStatus,
+  updateAgentRoles,
   type NeedRequestInfo,
 } from '@/app/market/actions'
 import NeedRequestsPanel from './NeedRequestsPanel'
@@ -45,6 +46,8 @@ type Props = {
   dropShipSales: DropShipSaleInfo[]
   agentVerifications: AgentVerificationInfo[]
   userCountyId: string | null
+  userRoles: string[]
+  userCountyIds: string[]
   userProfile: UserProfileInfo | null
   user: User
 }
@@ -68,15 +71,24 @@ function deviation(price: number, prev: number | null) {
 export default function DashboardClient({
   countries, counties, items, prices, allowedEmails, dropShipItems, challenges, needRequests,
   routes, news, dropShipSales, agentVerifications,
-  userCountyId, userProfile, user,
+  userCountyId, userRoles, userCountyIds, userProfile, user,
 }: Props) {
   const router = useRouter()
   const [, startTransition] = useTransition()
   const isAdmin = userCountyId === null
+  const hasRole = (role: string) => isAdmin || userRoles.includes(role)
+
+  // Counties the agent is allowed to manage (union of countyId + countyIds)
+  const agentCountyIds = (() => {
+    const ids = new Set<string>(userCountyIds)
+    if (userCountyId) ids.add(userCountyId)
+    return [...ids]
+  })()
+  const agentCounties = !isAdmin ? counties.filter(c => agentCountyIds.includes(c.id)) : counties
 
   const kenyaId = countries.find((c) => c.name === 'Kenya')?.id ?? countries[0]?.id ?? ''
   const defaultCountyId = (() => {
-    if (userCountyId) return userCountyId
+    if (!isAdmin && agentCounties.length > 0) return agentCounties[0].id
     const kc = counties.filter((c) => c.countryId === kenyaId)
     return kc.find((c) => c.name === 'Nairobi')?.id ?? kc[0]?.id ?? counties[0]?.id ?? ''
   })()
@@ -98,16 +110,35 @@ export default function DashboardClient({
   const [showNewsPanel, setShowNewsPanel] = useState(false)
   const [showSalesPanel, setShowSalesPanel] = useState(false)
   const [showVerificationsPanel, setShowVerificationsPanel] = useState(false)
+  const [showMarketPanel, setShowMarketPanel] = useState(() => isAdmin || userRoles.includes('market'))
   const [showProfilePanel, setShowProfilePanel] = useState(false)
   const [showVerificationModal, setShowVerificationModal] = useState(false)
+  const [profileWarning, setProfileWarning] = useState(false)
+  const [showManageMenu, setShowManageMenu] = useState(false)
   const profileRef = useRef<HTMLDivElement>(null)
+  const manageMenuRef = useRef<HTMLDivElement>(null)
+
+  const closeAllPanels = () => {
+    setShowEmailPanel(false)
+    setShowItemsPanel(false)
+    setShowDropShipPanel(false)
+    setShowChallengePanel(false)
+    setShowNeedPanel(false)
+    setShowRoutesPanel(false)
+    setShowNewsPanel(false)
+    setShowSalesPanel(false)
+    setShowVerificationsPanel(false)
+    setShowMarketPanel(false)
+  }
 
   const pendingVerifications = agentVerifications.filter((v) => v.verificationStatus === 'PENDING').length
   const pendingSales = dropShipSales.filter((s) => s.status === 'PENDING').length
 
-  const filteredCounties = isAdmin && selectedCountryId
-    ? counties.filter((c) => c.countryId === selectedCountryId)
-    : counties
+  const filteredCounties = !isAdmin
+    ? agentCounties
+    : selectedCountryId
+      ? counties.filter((c) => c.countryId === selectedCountryId)
+      : counties
 
   const selectedCounty = counties.find((c) => c.id === selectedCountyId)
   const marketsInCounty = selectedCounty?.markets ?? []
@@ -128,6 +159,17 @@ export default function DashboardClient({
     if (showProfilePanel) document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [showProfilePanel])
+
+  // Close manage menu on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (manageMenuRef.current && !manageMenuRef.current.contains(e.target as Node)) {
+        setShowManageMenu(false)
+      }
+    }
+    if (showManageMenu) document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showManageMenu])
 
   const visibleMarkets = marketsInCounty
     .filter((m) => !selectedMarketId || m.id === selectedMarketId)
@@ -158,83 +200,27 @@ export default function DashboardClient({
       <header className="bg-linear-to-r from-indigo-800 to-violet-800 shadow-lg sticky top-0 z-20">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-xl bg-white/20 grid place-items-center font-black text-white text-lg">Kwenik</div>
+            <div className="h-9 w-9 rounded-xl bg-white/20 grid place-items-center font-black text-white text-lg">K</div>
             <span className="font-bold text-white text-lg tracking-tight hidden sm:block">
-              Mkt<span className="text-violet-200">Prices</span>
+              Mkt<span className="text-violet-200"> Prices</span>
               <span className="ml-2 text-xs font-normal bg-white/20 rounded-full px-2 py-0.5">Dashboard</span>
             </span>
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
-            {/* Desktop admin buttons */}
-            {isAdmin && (
-              <>
-                <button
-                  onClick={() => { setShowItemsPanel((v) => !v); setShowEmailPanel(false); setShowDropShipPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showItemsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Products
-                </button>
-                <button
-                  onClick={() => { setShowDropShipPanel((v) => !v); setShowItemsPanel(false); setShowEmailPanel(false); setShowChallengePanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showDropShipPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Drop Ship
-                </button>
-                <button
-                  onClick={() => { setShowChallengePanel((v) => !v); setShowDropShipPanel(false); setShowItemsPanel(false); setShowEmailPanel(false); setShowNeedPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showChallengePanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Challenge
-                </button>
-                <button
-                  onClick={() => { setShowNeedPanel((v) => !v); setShowChallengePanel(false); setShowDropShipPanel(false); setShowItemsPanel(false); setShowEmailPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showNeedPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Needs
-                  {needRequests.filter(r => r.status === 'SUBMITTED').length > 0 && (
-                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold">
-                      {needRequests.filter(r => r.status === 'SUBMITTED').length}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => { setShowRoutesPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowNewsPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showRoutesPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Fares
-                </button>
-                <button
-                  onClick={() => { setShowNewsPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showNewsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  News
-                </button>
-                <button
-                  onClick={() => { setShowSalesPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowVerificationsPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showSalesPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Sales
-                  {pendingSales > 0 && (
-                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold">{pendingSales}</span>
-                  )}
-                </button>
-                <button
-                  onClick={() => { setShowVerificationsPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowSalesPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showVerificationsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Agents
-                  {pendingVerifications > 0 && (
-                    <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-400 text-white text-[10px] font-bold">{pendingVerifications}</span>
-                  )}
-                </button>
-                <button
-                  onClick={() => { setShowEmailPanel((v) => !v); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-                  className={`hidden sm:flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showEmailPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
-                >
-                  Access
-                </button>
-              </>
+            {/* Manage button — admins always, agents when they have roles */}
+            {(isAdmin || userRoles.length > 0) && (
+              <button
+                onClick={() => setShowManageMenu(v => !v)}
+                className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showManageMenu ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white hover:bg-white/20'}`}
+              >
+                ⚙ Manage {showManageMenu ? '▲' : '▼'}
+                {isAdmin && (pendingVerifications + pendingSales + needRequests.filter(r => r.status === 'SUBMITTED').length) > 0 && (
+                  <span className="inline-flex items-center justify-center min-w-[1rem] h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold px-1">
+                    {pendingVerifications + pendingSales + needRequests.filter(r => r.status === 'SUBMITTED').length}
+                  </span>
+                )}
+              </button>
             )}
 
             {/* Profile button */}
@@ -305,96 +291,59 @@ export default function DashboardClient({
         </div>
       </header>
 
-      {/* Mobile admin toolbar */}
-      {isAdmin && (
-        <div className="sm:hidden bg-indigo-900 px-4 py-2 flex items-center gap-2 border-t border-white/10 sticky top-16 z-10">
-          <button
-            onClick={() => { setShowItemsPanel((v) => !v); setShowEmailPanel(false); setShowDropShipPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showItemsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            🌾 Products
-          </button>
-          <button
-            onClick={() => { setShowDropShipPanel((v) => !v); setShowItemsPanel(false); setShowEmailPanel(false); setShowChallengePanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showDropShipPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            📦 Drop Ship
-          </button>
-          <button
-            onClick={() => { setShowChallengePanel((v) => !v); setShowDropShipPanel(false); setShowItemsPanel(false); setShowEmailPanel(false); setShowNeedPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showChallengePanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            🏆 Challenge
-          </button>
-          <button
-            onClick={() => { setShowNeedPanel((v) => !v); setShowChallengePanel(false); setShowDropShipPanel(false); setShowItemsPanel(false); setShowEmailPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showNeedPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            📋 Needs
-            {needRequests.filter(r => r.status === 'SUBMITTED').length > 0 && (
-              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold">
-                {needRequests.filter(r => r.status === 'SUBMITTED').length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => { setShowRoutesPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowNewsPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showRoutesPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            🚌 Fares
-          </button>
-          <button
-            onClick={() => { setShowNewsPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showNewsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            📰 News
-          </button>
-          <button
-            onClick={() => { setShowSalesPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowVerificationsPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showSalesPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            📊 Sales
-            {pendingSales > 0 && (
-              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-amber-400 text-white text-[10px] font-bold">{pendingSales}</span>
-            )}
-          </button>
-          <button
-            onClick={() => { setShowVerificationsPanel((v) => !v); setShowEmailPanel(false); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowSalesPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showVerificationsPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            🪪 Agents
-            {pendingVerifications > 0 && (
-              <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-400 text-white text-[10px] font-bold">{pendingVerifications}</span>
-            )}
-          </button>
-          <button
-            onClick={() => { setShowEmailPanel((v) => !v); setShowItemsPanel(false); setShowDropShipPanel(false); setShowChallengePanel(false); setShowNeedPanel(false); setShowRoutesPanel(false); setShowNewsPanel(false); setShowSalesPanel(false); setShowVerificationsPanel(false) }}
-            className={`flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold transition-colors ${showEmailPanel ? 'bg-white/25 border-white/40 text-white' : 'bg-white/10 border-white/20 text-white'}`}
-          >
-            🔐 Access
-          </button>
+      {/* Manage menu panel */}
+      {showManageMenu && (isAdmin || userRoles.length > 0) && (
+        <div ref={manageMenuRef} className="bg-white border-b border-gray-200 shadow-sm sticky top-16 z-10">
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3">
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: 'market',    icon: '🏪', label: 'Market',    show: isAdmin || hasRole('market'),    setter: () => { closeAllPanels(); setShowMarketPanel(true);       setShowManageMenu(false) }, active: showMarketPanel },
+                { key: 'items',     icon: '🌾', label: 'Products',  show: isAdmin,                         setter: () => { closeAllPanels(); setShowItemsPanel(true);        setShowManageMenu(false) }, active: showItemsPanel },
+                { key: 'dropship',  icon: '📦', label: 'Drop Ship', show: isAdmin || hasRole('drop-ship'), setter: () => { closeAllPanels(); setShowDropShipPanel(true);     setShowManageMenu(false) }, active: showDropShipPanel },
+                { key: 'challenge', icon: '🏆', label: 'Challenge', show: isAdmin || hasRole('challenge'), setter: () => { closeAllPanels(); setShowChallengePanel(true);    setShowManageMenu(false) }, active: showChallengePanel },
+                { key: 'needs',     icon: '📋', label: 'Needs',     show: isAdmin || hasRole('needs'),     setter: () => { closeAllPanels(); setShowNeedPanel(true);         setShowManageMenu(false) }, active: showNeedPanel, badge: needRequests.filter(r => r.status === 'SUBMITTED').length },
+                { key: 'fares',     icon: '🚌', label: 'Fares',     show: isAdmin || hasRole('fares'),     setter: () => { closeAllPanels(); setShowRoutesPanel(true);       setShowManageMenu(false) }, active: showRoutesPanel },
+                { key: 'news',      icon: '📰', label: 'News',      show: isAdmin || hasRole('news'),      setter: () => { closeAllPanels(); setShowNewsPanel(true);         setShowManageMenu(false) }, active: showNewsPanel },
+                { key: 'sales',     icon: '📊', label: 'Sales',     show: isAdmin,                         setter: () => { closeAllPanels(); setShowSalesPanel(true);        setShowManageMenu(false) }, active: showSalesPanel, badge: pendingSales },
+                { key: 'agents',    icon: '🪪', label: 'Agents',    show: isAdmin,                         setter: () => { closeAllPanels(); setShowVerificationsPanel(true); setShowManageMenu(false) }, active: showVerificationsPanel, badge: pendingVerifications },
+                { key: 'access',    icon: '🔐', label: 'Access',    show: isAdmin,                         setter: () => { closeAllPanels(); setShowEmailPanel(true);        setShowManageMenu(false) }, active: showEmailPanel },
+              ].filter(item => item.show).map(item => (
+                <button key={item.key} onClick={item.setter}
+                  className={`relative flex flex-col items-center gap-1 rounded-xl px-3 py-2.5 text-xs font-semibold transition-colors ${item.active ? 'bg-indigo-600 text-white' : 'bg-gray-50 text-gray-600 hover:bg-indigo-50 hover:text-indigo-700'}`}>
+                  <span className="text-base leading-none">{item.icon}</span>
+                  <span className="leading-none text-[10px]">{item.label}</span>
+                  {(item.badge ?? 0) > 0 && (
+                    <span className="absolute -top-1 -right-1 inline-flex items-center justify-center w-4 h-4 rounded-full bg-red-500 text-white text-[9px] font-bold">
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
+
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6">
-        {/* Admin panels */}
+        {/* Management panels — admin always; agents gated by role */}
         {isAdmin && showItemsPanel && (
           <ItemsPanel items={items} onEdit={(item) => setModal({ type: 'edit-item', item })} onDone={() => router.refresh()} />
         )}
-        {isAdmin && showDropShipPanel && (
+        {(isAdmin || hasRole('drop-ship')) && showDropShipPanel && (
           <DropShipPanel items={dropShipItems} counties={counties} onDone={() => router.refresh()} />
         )}
-        {isAdmin && showChallengePanel && (
+        {(isAdmin || hasRole('challenge')) && showChallengePanel && (
           <ChallengePanel challenges={challenges} onDone={() => router.refresh()} />
         )}
-        {isAdmin && showNeedPanel && (
+        {(isAdmin || hasRole('needs')) && showNeedPanel && (
           <NeedRequestsPanel requests={needRequests} onDone={() => router.refresh()} />
         )}
-        {isAdmin && showRoutesPanel && (
+        {(isAdmin || hasRole('fares')) && showRoutesPanel && (
           <RoutesPanel routes={routes} counties={counties} onDone={() => router.refresh()} />
         )}
-        {isAdmin && showNewsPanel && (
-          <NewsPanel news={news} onDone={() => router.refresh()} />
+        {(isAdmin || hasRole('news')) && showNewsPanel && (
+          <NewsPanel news={news} counties={counties} onDone={() => router.refresh()} />
         )}
         {isAdmin && showSalesPanel && (
           <DropShipSalesAdminPanel sales={dropShipSales} dropShipItems={dropShipItems} onDone={() => router.refresh()} />
@@ -406,11 +355,30 @@ export default function DashboardClient({
           <EmailAccessPanel emails={allowedEmails} counties={counties} onDone={() => router.refresh()} />
         )}
 
-        {/* Non-admin: agent verification button */}
-        {!isAdmin && (
-          <div className="flex justify-end">
+        {/* Non-admin: no roles message */}
+        {!isAdmin && userRoles.length === 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-8 text-center space-y-2">
+            <div className="text-3xl">🔒</div>
+            <p className="text-sm font-bold text-amber-700">No roles assigned yet</p>
+            <p className="text-xs text-amber-600">Contact your admin to be assigned roles (market, fares, needs, etc.) before you can manage anything here.</p>
+          </div>
+        )}
+
+        {/* Non-admin: agent verification button — hidden if already verified */}
+        {!isAdmin && userProfile?.verificationStatus !== 'VERIFIED' && (
+          <div className="flex flex-col items-end gap-2">
+            {profileWarning && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                Please fill your <strong>full name</strong>, <strong>phone</strong> and <strong>M-Pesa number</strong> in your profile before submitting agent verification.
+              </p>
+            )}
             <button
-              onClick={() => setShowVerificationModal(true)}
+              onClick={() => {
+                const complete = !!(userProfile?.fullName && userProfile?.tel && userProfile?.mpesaNumber)
+                if (!complete) { setProfileWarning(true); setShowProfilePanel(true); return }
+                setProfileWarning(false)
+                setShowVerificationModal(true)
+              }}
               className="flex items-center gap-2 rounded-xl bg-linear-to-r from-indigo-600 to-violet-600 px-4 py-2 text-sm font-bold text-white shadow hover:from-indigo-500 hover:to-violet-500 transition-all"
             >
               🪪 Agent Verification
@@ -418,6 +386,9 @@ export default function DashboardClient({
           </div>
         )}
         {showVerificationModal && <AgentVerificationModal onClose={() => { setShowVerificationModal(false); router.refresh() }} />}
+
+        {/* Market section — visible when market panel is active (controls both admin & agents with market role) */}
+        {showMarketPanel && (<>
 
         {/* Filter + action bar */}
         <div className="flex flex-wrap items-center gap-2 sm:gap-3 bg-white rounded-2xl border border-gray-200 shadow-sm px-4 sm:px-5 py-3 sm:py-4">
@@ -448,6 +419,14 @@ export default function DashboardClient({
                 }
               </select>
             </>
+          ) : agentCounties.length > 1 ? (
+            <select
+              value={selectedCountyId}
+              onChange={(e) => { setSelectedCountyId(e.target.value); setSelectedMarketId('') }}
+              className={selectClass}
+            >
+              {agentCounties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
           ) : (
             <span className="inline-flex items-center gap-2 rounded-xl bg-violet-50 border border-violet-200 px-4 py-2 text-sm font-semibold text-violet-700">
               <span className="h-2 w-2 rounded-full bg-violet-500" />
@@ -527,6 +506,7 @@ export default function DashboardClient({
             />
           )
         })}
+        </>)}
       </main>
 
       <footer className="mt-12 border-t border-gray-200 bg-white py-5 text-center text-xs text-gray-400">
@@ -681,12 +661,16 @@ function ProfileField({ label, name, defaultValue, placeholder }: {
 
 /* ─── Items Panel ────────────────────────────────────────────────── */
 
+const PAGE_SIZE = 10
+
 function ItemsPanel({
   items, onEdit, onDone,
 }: { items: ItemInfo[]; onEdit: (item: ItemInfo) => void; onDone: () => void }) {
   const [isPending, startTransition] = useTransition()
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+  const [pageCount, setPageCount] = useState(1)
 
   const handleDelete = (id: string) => {
     if (!confirm('Delete this commodity? This will fail if prices are still attached.')) return
@@ -700,40 +684,163 @@ function ItemsPanel({
     })
   }
 
+  const q = search.trim().toLowerCase()
+  const filtered = q ? items.filter((i) => i.name.toLowerCase().includes(q) || i.unitMeasure.toLowerCase().includes(q)) : items
+  const visible = filtered.slice(0, pageCount * PAGE_SIZE)
+  const hasMore = visible.length < filtered.length
+
   return (
     <div className="rounded-2xl border border-violet-200 bg-white shadow-sm overflow-hidden">
       <div className="bg-linear-to-r from-indigo-800 to-violet-800 px-5 py-3.5 flex items-center gap-2">
         <span className="text-base">🌾</span>
-        <h2 className="text-sm font-bold text-white">Manage Commodities</h2>
-        <span className="ml-auto text-xs text-white/50">{items.length} item{items.length !== 1 ? 's' : ''}</span>
+        <h2 className="text-sm font-bold text-white">Manage Products</h2>
+        <span className="ml-auto text-xs text-white/50">{filtered.length}/{items.length}</span>
       </div>
-      <div className="p-5">
-        {error && <p className="text-sm text-red-500 mb-3">{error}</p>}
-        {items.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-2">No commodities yet.</p>
+      <div className="p-4 space-y-3">
+        <input
+          type="search" value={search} onChange={(e) => { setSearch(e.target.value); setPageCount(1) }}
+          placeholder="Search products…"
+          className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-sm focus:border-violet-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-100 transition-all"
+        />
+        {error && <p className="text-sm text-red-500">{error}</p>}
+        {filtered.length === 0 ? (
+          <p className="text-sm text-gray-400 text-center py-4">No products match your search.</p>
         ) : (
-          <ul className="divide-y divide-gray-100">
-            {items.map((item) => (
-              <li key={item.id} className="flex items-center gap-3 py-2.5">
-                <span className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-bold text-white ${itemBadgeColor(item.name)}`}>
-                  {item.name}
-                </span>
-                <span className="text-xs text-gray-400 flex-1">{item.unitMeasure}</span>
-                <button onClick={() => onEdit(item)} className="rounded-lg px-3 py-1 text-xs font-semibold text-violet-600 hover:bg-violet-50 transition-colors">
-                  Edit
-                </button>
-                <button
-                  onClick={() => handleDelete(item.id)}
-                  disabled={deletingId === item.id || isPending}
-                  className="rounded-lg px-3 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors"
-                >
-                  {deletingId === item.id ? '…' : 'Delete'}
-                </button>
-              </li>
-            ))}
-          </ul>
+          <>
+            <div className="overflow-x-auto rounded-xl border border-gray-100">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                    <th className="px-4 py-2.5 text-left">Name</th>
+                    <th className="px-4 py-2.5 text-left">Unit</th>
+                    <th className="px-4 py-2.5 text-left">Type</th>
+                    <th className="px-4 py-2.5 text-right w-24"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {visible.map((item) => (
+                    <tr key={item.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-2.5">
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-bold text-white ${itemBadgeColor(item.name)}`}>
+                          {item.name}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-gray-500 text-xs">{item.unitMeasure}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`text-xs font-semibold ${item.type === 'labour' ? 'text-amber-600' : 'text-gray-400'}`}>
+                          {item.type === 'labour' ? '🔧 Labour' : '📦 Commodity'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button onClick={() => onEdit(item)} className="rounded px-2 py-1 text-xs font-semibold text-violet-600 hover:bg-violet-50">Edit</button>
+                        <button onClick={() => handleDelete(item.id)} disabled={deletingId === item.id || isPending}
+                          className="rounded px-2 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-40 ml-1">
+                          {deletingId === item.id ? '…' : 'Del'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {hasMore && (
+              <button onClick={() => setPageCount((p) => p + 1)}
+                className="w-full rounded-xl border border-gray-200 py-2 text-xs font-semibold text-gray-500 hover:bg-gray-50 transition-colors">
+                Show more ({filtered.length - visible.length} remaining)
+              </button>
+            )}
+          </>
         )}
       </div>
+    </div>
+  )
+}
+
+/* ─── Agent Role Editor ──────────────────────────────────────────── */
+
+const ROLE_OPTIONS = [
+  { value: 'market', label: '🏪 Market' },
+  { value: 'needs', label: '📋 Needs' },
+  { value: 'fares', label: '🚌 Fares' },
+  { value: 'drop-ship', label: '📦 Drop Ship' },
+  { value: 'challenge', label: '🏆 Challenge' },
+  { value: 'news', label: '📰 News' },
+]
+
+function AgentRoleEditor({ emailEntry, counties, onDone }: {
+  emailEntry: AllowedEmailInfo
+  counties: CountyInfo[]
+  onDone: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [selectedRoles, setSelectedRoles] = useState<string[]>(emailEntry.roles)
+  const [selectedCounties, setSelectedCounties] = useState<string[]>(emailEntry.countyIds)
+  const [isPending, startTransition] = useTransition()
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const toggleRole = (v: string) =>
+    setSelectedRoles(prev => prev.includes(v) ? prev.filter(r => r !== v) : [...prev, v])
+  const toggleCounty = (id: string) =>
+    setSelectedCounties(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id])
+
+  const handleSave = () => {
+    setError(null); setSaved(false)
+    startTransition(async () => {
+      const r = await updateAgentRoles(emailEntry.id, selectedRoles, selectedCounties)
+      if (r.success) { setSaved(true); setOpen(false); onDone() }
+      else setError(r.error)
+    })
+  }
+
+  return (
+    <div className="w-full mt-1">
+      <div className="flex flex-wrap items-center gap-1">
+        {emailEntry.roles.length > 0
+          ? emailEntry.roles.map(r => (
+            <span key={r} className="inline-flex items-center rounded-full bg-violet-100 border border-violet-200 px-2 py-0.5 text-[10px] font-semibold text-violet-700">
+              {ROLE_OPTIONS.find(o => o.value === r)?.label ?? r}
+            </span>
+          ))
+          : <span className="text-[10px] text-gray-400 italic">No roles assigned</span>
+        }
+        <button onClick={() => setOpen(v => !v)}
+          className="rounded-full border border-gray-200 px-2 py-0.5 text-[10px] font-semibold text-gray-500 hover:border-violet-300 hover:text-violet-700 transition-colors ml-1">
+          {open ? 'Close' : 'Assign Roles'}
+        </button>
+      </div>
+      {open && (
+        <div className="mt-2 rounded-xl border border-violet-200 bg-violet-50 p-3 space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Roles</p>
+            <div className="flex flex-wrap gap-2">
+              {ROLE_OPTIONS.map(opt => (
+                <label key={opt.value} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={selectedRoles.includes(opt.value)} onChange={() => toggleRole(opt.value)} className="accent-violet-600 rounded" />
+                  <span className="text-xs text-gray-700">{opt.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-1.5">Allowed Counties</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1 max-h-36 overflow-y-auto">
+              {counties.map(c => (
+                <label key={c.id} className="flex items-center gap-1.5 cursor-pointer">
+                  <input type="checkbox" checked={selectedCounties.includes(c.id)} onChange={() => toggleCounty(c.id)} className="accent-violet-600 rounded" />
+                  <span className="text-xs text-gray-700 truncate">{c.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          {error && <p className="text-xs text-red-500">{error}</p>}
+          {saved && <p className="text-xs text-emerald-600 font-semibold">Saved ✓</p>}
+          <button onClick={handleSave} disabled={isPending}
+            className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-4 py-1.5 text-xs font-bold text-white disabled:opacity-60 transition-all">
+            {isPending ? 'Saving…' : 'Save Roles'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -802,24 +909,32 @@ function EmailAccessPanel({
         ) : (
           <ul className="divide-y divide-gray-100">
             {emails.map((e) => (
-              <li key={e.id} className="flex items-center gap-3 py-2.5 flex-wrap sm:flex-nowrap">
-                <span className="text-sm text-gray-700 font-mono flex-1 min-w-0 truncate">{e.email}</span>
-                <select
-                  value={e.countyId ?? ''}
-                  onChange={(ev) => handleAssign(e.id, ev.target.value || null)}
-                  disabled={assigningId === e.id || isPending}
-                  className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:border-violet-400 focus:outline-none disabled:opacity-50 max-w-36"
-                >
-                  <option value="">Global admin</option>
-                  {counties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                <button
-                  onClick={() => handleRemove(e.id)}
-                  disabled={removingId === e.id || isPending}
-                  className="rounded-lg px-3 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors shrink-0"
-                >
-                  {removingId === e.id ? '…' : 'Remove'}
-                </button>
+              <li key={e.id} className="py-2.5 space-y-1">
+                <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+                  <span className="text-sm text-gray-700 font-mono flex-1 min-w-0 truncate">{e.email}</span>
+                  <select
+                    value={e.countyId ?? ''}
+                    onChange={(ev) => handleAssign(e.id, ev.target.value || null)}
+                    disabled={assigningId === e.id || isPending}
+                    className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:border-violet-400 focus:outline-none disabled:opacity-50 max-w-36"
+                  >
+                    <option value="">Global admin</option>
+                    {counties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <button
+                    onClick={() => handleRemove(e.id)}
+                    disabled={removingId === e.id || isPending}
+                    className="rounded-lg px-3 py-1 text-xs font-semibold text-red-500 hover:bg-red-50 disabled:opacity-40 transition-colors shrink-0"
+                  >
+                    {removingId === e.id ? '…' : 'Remove'}
+                  </button>
+                </div>
+                {e.countyId !== null && (
+                  <AgentRoleEditor
+                    key={`${e.id}|${e.roles.join(',')}|${e.countyIds.join(',')}`}
+                    emailEntry={e} counties={counties} onDone={onDone}
+                  />
+                )}
               </li>
             ))}
           </ul>
@@ -1868,6 +1983,7 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deletingFareId, setDeletingFareId] = useState<string | null>(null)
+  const [formCountyId, setFormCountyId] = useState('')
 
   const handleAddRoute = (e: React.SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault(); setError(null)
@@ -1916,7 +2032,7 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
         {/* Add route form */}
         <form onSubmit={handleAddRoute} className="rounded-xl border border-violet-100 bg-violet-50 p-4 space-y-3">
           <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">Add Route</p>
-          <div className="grid sm:grid-cols-3 gap-3">
+          <div className="grid sm:grid-cols-2 gap-3">
             <div className="flex flex-col gap-1">
               <label className="text-xs font-semibold text-gray-500">From <span className="text-red-400">*</span></label>
               <input type="text" name="from" required placeholder="e.g. Nairobi" className={fieldClass} />
@@ -1926,10 +2042,19 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
               <input type="text" name="to" required placeholder="e.g. Githurai" className={fieldClass} />
             </div>
             <div className="flex flex-col gap-1">
-              <label className="text-xs font-semibold text-gray-500">County</label>
-              <select name="countyId" className={fieldClass}>
-                <option value="">All / National</option>
+              <label className="text-xs font-semibold text-gray-500">County <span className="text-gray-400 font-normal">(optional)</span></label>
+              <select name="countyId" value={formCountyId} onChange={(e) => setFormCountyId(e.target.value)} className={fieldClass}>
+                <option value="">— Select county</option>
                 {counties.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-gray-500">Market <span className="text-gray-400 font-normal">(ties route to market)</span></label>
+              <select name="marketId" className={fieldClass} disabled={!formCountyId}>
+                <option value="">— Select market</option>
+                {(counties.find((c) => c.id === formCountyId)?.markets ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -1946,8 +2071,11 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
           <ul className="divide-y divide-gray-100">
             {routes.map((route) => (
               <li key={route.id} className="py-3 space-y-2">
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <span className="font-semibold text-sm text-gray-800">{route.from} → {route.to}</span>
+                  {route.marketName && (
+                    <span className="rounded-full bg-violet-50 border border-violet-100 px-2 py-0.5 text-xs text-violet-700">{route.marketName}</span>
+                  )}
                   {route.countyName && (
                     <span className="rounded-full bg-indigo-50 border border-indigo-100 px-2 py-0.5 text-xs text-indigo-700">{route.countyName}</span>
                   )}
@@ -2005,9 +2133,7 @@ function RoutesPanel({ routes, counties, onDone }: { routes: RouteInfo[]; counti
 
 /* ─── News Panel ─────────────────────────────────────────────────── */
 
-const NEWS_CATEGORIES = ['general', 'security', 'jobs', 'opportunities']
-
-function NewsPanel({ news, onDone }: { news: NewsInfo[]; onDone: () => void }) {
+function NewsPanel({ news, counties, onDone }: { news: NewsInfo[]; counties: CountyInfo[]; onDone: () => void }) {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState<string | null>(null)
   const [editingItem, setEditingItem] = useState<NewsInfo | null>(null)
@@ -2016,13 +2142,6 @@ function NewsPanel({ news, onDone }: { news: NewsInfo[]; onDone: () => void }) {
 
   const fmtDT = (iso: string) =>
     new Date(iso).toLocaleString('en-KE', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-
-  const catColor: Record<string, string> = {
-    security: 'bg-red-50 border-red-200 text-red-700',
-    jobs: 'bg-emerald-50 border-emerald-200 text-emerald-700',
-    opportunities: 'bg-amber-50 border-amber-200 text-amber-700',
-    general: 'bg-gray-50 border-gray-200 text-gray-600',
-  }
 
   const handleSubmit = (e: React.SyntheticEvent<HTMLFormElement>, isEdit: boolean) => {
     e.preventDefault(); setError(null)
@@ -2040,50 +2159,110 @@ function NewsPanel({ news, onDone }: { news: NewsInfo[]; onDone: () => void }) {
     startTransition(async () => { await deleteNews(id); setDeletingId(null); onDone() })
   }
 
-  const NewsForm = ({ item }: { item?: NewsInfo }) => (
-    <form onSubmit={(e) => handleSubmit(e, !!item)} className="rounded-xl border border-violet-100 bg-violet-50 p-4 space-y-3">
-      {item && <input type="hidden" name="id" value={item.id} />}
-      <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">{item ? 'Edit News' : 'New Alert / News'}</p>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-semibold text-gray-500">Title <span className="text-red-400">*</span></label>
-        <input type="text" name="title" required defaultValue={item?.title ?? ''} placeholder="e.g. Market closure notice" className={fieldClass} />
-      </div>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-semibold text-gray-500">Description <span className="text-red-400">*</span></label>
-        <textarea name="description" required rows={3} defaultValue={item?.description ?? ''} placeholder="Full details…"
-          className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 resize-none transition-all" />
-      </div>
-      <div className="grid sm:grid-cols-3 gap-3">
+  const NewsForm = ({ item }: { item?: NewsInfo }) => {
+    const [newsTarget, setNewsTarget] = useState(item?.target ?? 'NATIONAL')
+    const [checkedCounties, setCheckedCounties] = useState<string[]>(item?.targetCountyIds ?? [])
+    const [newsMarketCountyId, setNewsMarketCountyId] = useState('')
+    const [newsMarketId, setNewsMarketId] = useState(item?.marketId ?? '')
+
+    const toggleCounty = (id: string) =>
+      setCheckedCounties(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
+
+    const marketsForCounty = counties.find(c => c.id === newsMarketCountyId)?.markets ?? []
+
+    return (
+      <form onSubmit={(e) => handleSubmit(e, !!item)} className="rounded-xl border border-violet-100 bg-violet-50 p-4 space-y-3">
+        {item && <input type="hidden" name="id" value={item.id} />}
+        {item && <input type="hidden" name="existingFileUrl" value={item.fileUrl ?? ''} />}
+        <input type="hidden" name="targetCountyIds" value={checkedCounties.join(',')} />
+        <input type="hidden" name="marketId" value={newsMarketId} />
+        <p className="text-xs font-bold text-violet-700 uppercase tracking-wider">{item ? 'Edit News' : 'New Alert / News'}</p>
         <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">Category</label>
-          <select name="category" defaultValue={item?.category ?? 'general'} className={fieldClass}>
-            {NEWS_CATEGORIES.map((c) => <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>)}
+          <label className="text-xs font-semibold text-gray-500">Title <span className="text-red-400">*</span></label>
+          <input type="text" name="title" required defaultValue={item?.title ?? ''} placeholder="e.g. Market closure notice" className={fieldClass} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-semibold text-gray-500">Description <span className="text-red-400">*</span></label>
+          <textarea name="description" required rows={3} defaultValue={item?.description ?? ''} placeholder="Full details…"
+            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-800 placeholder-gray-400 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 resize-none transition-all" />
+        </div>
+
+        {/* Target selector */}
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-semibold text-gray-500">Target audience</label>
+          <select name="target" value={newsTarget} onChange={e => { setNewsTarget(e.target.value); setCheckedCounties([]); setNewsMarketId('') }} className={fieldClass}>
+            <option value="NATIONAL">National (everyone)</option>
+            <option value="REGIONAL">Regional (multiple counties)</option>
+            <option value="COUNTY">County (specific county)</option>
+            <option value="MARKET">Market (specific market)</option>
           </select>
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">Publish Date/Time</label>
-          <input type="datetime-local" name="publishedAt"
-            defaultValue={item ? item.publishedAt.slice(0, 16) : new Date().toISOString().slice(0, 16)}
-            className={fieldClass} />
+
+        {/* County checkboxes for REGIONAL / COUNTY */}
+        {(newsTarget === 'REGIONAL' || newsTarget === 'COUNTY') && (
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+            <p className="text-xs font-semibold text-gray-500 mb-2">Select counties <span className="text-red-400">*</span></p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 max-h-40 overflow-y-auto">
+              {counties.map(c => (
+                <label key={c.id} className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={checkedCounties.includes(c.id)} onChange={() => toggleCounty(c.id)} className="accent-violet-600 rounded" />
+                  <span className="text-xs text-gray-700 truncate">{c.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Market selector for MARKET */}
+        {newsTarget === 'MARKET' && (
+          <div className="grid sm:grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-gray-500">County</label>
+              <select value={newsMarketCountyId} onChange={e => { setNewsMarketCountyId(e.target.value); setNewsMarketId('') }} className={fieldClass}>
+                <option value="">— Select county</option>
+                {counties.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-semibold text-gray-500">Market</label>
+              <select value={newsMarketId} onChange={e => setNewsMarketId(e.target.value)} className={fieldClass} disabled={!newsMarketCountyId}>
+                <option value="">— Select market</option>
+                {marketsForCounty.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500">Event Date / Time <span className="text-gray-400 font-normal">(when activity happens)</span></label>
+            <input type="datetime-local" name="eventTime"
+              defaultValue={item ? item.eventTime.slice(0, 16) : new Date().toISOString().slice(0, 16)}
+              className={fieldClass} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-semibold text-gray-500">
+              {item ? <>Replace file <span className="text-gray-400 font-normal">(optional)</span></> : <>Attachment <span className="text-gray-400 font-normal">(PDF or image)</span></>}
+            </label>
+            <input type="file" name="file" accept=".pdf,image/*"
+              className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 file:mr-3 file:rounded-lg file:border-0 file:bg-violet-100 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-violet-700 hover:file:bg-violet-200 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition-all" />
+            {item?.fileUrl && <a href={item.fileUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-indigo-600 hover:underline">Current attachment</a>}
+          </div>
         </div>
-        <div className="flex flex-col gap-1">
-          <label className="text-xs font-semibold text-gray-500">File URL <span className="text-gray-400 font-normal">(optional)</span></label>
-          <input type="url" name="fileUrl" defaultValue={item?.fileUrl ?? ''} placeholder="https://…" className={fieldClass} />
+        {error && <p className="text-xs text-red-500">{error}</p>}
+        <div className="flex gap-2">
+          <button type="submit" disabled={isPending}
+            className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60 hover:from-violet-500 hover:to-indigo-500 transition-all">
+            {isPending ? 'Saving…' : item ? 'Save changes' : 'Publish'}
+          </button>
+          <button type="button" onClick={() => { setShowAdd(false); setEditingItem(null) }}
+            className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
+            Cancel
+          </button>
         </div>
-      </div>
-      {error && <p className="text-xs text-red-500">{error}</p>}
-      <div className="flex gap-2">
-        <button type="submit" disabled={isPending}
-          className="rounded-xl bg-linear-to-r from-violet-600 to-indigo-600 px-5 py-2 text-sm font-bold text-white disabled:opacity-60 hover:from-violet-500 hover:to-indigo-500 transition-all">
-          {isPending ? 'Saving…' : item ? 'Save changes' : 'Publish'}
-        </button>
-        <button type="button" onClick={() => { setShowAdd(false); setEditingItem(null) }}
-          className="rounded-xl border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition-colors">
-          Cancel
-        </button>
-      </div>
-    </form>
-  )
+      </form>
+    )
+  }
 
   return (
     <div className="rounded-2xl border border-violet-200 bg-white shadow-sm overflow-hidden">
@@ -2111,11 +2290,8 @@ function NewsPanel({ news, onDone }: { news: NewsInfo[]; onDone: () => void }) {
                 {editingItem?.id === item.id ? null : (
                   <>
                     <div className="flex items-start gap-2 flex-wrap">
-                      <span className={`rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${catColor[item.category] ?? catColor.general}`}>
-                        {item.category}
-                      </span>
                       <p className="font-semibold text-sm text-gray-800 flex-1">{item.title}</p>
-                      <span className="text-xs text-gray-400 shrink-0">{fmtDT(item.publishedAt)}</span>
+                      <span className="text-xs text-gray-400 shrink-0">Event: {fmtDT(item.eventTime)}</span>
                     </div>
                     <p className="text-xs text-gray-600 line-clamp-2">{item.description}</p>
                     {item.fileUrl && (

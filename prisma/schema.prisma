@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model Country {
@@ -29,6 +29,8 @@ model Market {
   countyId String
   county   County        @relation(fields: [countyId], references: [id], onDelete: Cascade)
   prices   MarketPrice[]
+  routes   Route[]
+  news     News[]
 
   @@unique([name, countyId])
 }
@@ -37,7 +39,7 @@ model Item {
   id          String        @id @default(cuid())
   name        String        @unique
   unitMeasure String        @default("kg")
-  type        String        @default("commodity") // commodity | labour
+  type        String        @default("commodity")
   prices      MarketPrice[]
 }
 
@@ -61,10 +63,12 @@ model Route {
   to        String
   countyId  String?
   county    County?  @relation(fields: [countyId], references: [id], onDelete: SetNull)
+  marketId  String?
+  market    Market?  @relation(fields: [marketId], references: [id], onDelete: SetNull)
   fares     Fare[]
   createdAt DateTime @default(now())
 
-  @@unique([from, to, countyId])
+  @@unique([from, to, marketId])
 }
 
 model Fare {
@@ -72,7 +76,8 @@ model Fare {
   routeId       String
   route         Route    @relation(fields: [routeId], references: [id], onDelete: Cascade)
   amount        Int
-  transportType String   @default("psv") // psv | bike | other
+  prevAmount    Int?
+  transportType String   @default("psv")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -80,10 +85,12 @@ model Fare {
 }
 
 model AllowedEmail {
-  id       String  @id @default(cuid())
-  email    String  @unique
-  countyId String?
-  county   County? @relation(fields: [countyId], references: [id], onDelete: SetNull)
+  id        String  @id @default(cuid())
+  email     String  @unique
+  countyId  String?
+  county    County? @relation(fields: [countyId], references: [id], onDelete: SetNull)
+  roles     String  @default("[]")
+  countyIds String  @default("[]")
 }
 
 model UserProfile {
@@ -97,7 +104,7 @@ model UserProfile {
   idFrontUrl         String?
   idBackUrl          String?
   selfieUrl          String?
-  verificationStatus String   @default("NONE") // NONE | PENDING | VERIFIED | REJECTED
+  verificationStatus String   @default("NONE")
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -110,7 +117,7 @@ model DropShipItem {
   tel             String
   date            DateTime
   target          String         @default("NATIONAL")
-  targetCountyIds String[]
+  targetCountyIds String         @default("[]")
   fileName        String
   fileData        Bytes?
   fileMime        String
@@ -125,9 +132,9 @@ model DropShipSale {
   dropShipItemId String
   dropShipItem   DropShipItem @relation(fields: [dropShipItemId], references: [id], onDelete: Cascade)
   mpesaNumber    String
-  commMethod     String       // sms | whatsapp | email | call
+  commMethod     String
   fileUrl        String?
-  status         String       @default("PENDING") // PENDING | REVIEWED | PROCESSED | PAID
+  status         String       @default("PENDING")
   agentNotes     String?
   adminNotes     String?
   createdAt      DateTime     @default(now())
@@ -135,14 +142,18 @@ model DropShipSale {
 }
 
 model News {
-  id          String   @id @default(cuid())
-  title       String
-  description String
-  fileUrl     String?
-  category    String   @default("general") // security | jobs | opportunities | general
-  publishedAt DateTime @default(now())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(cuid())
+  title           String
+  description     String
+  fileUrl         String?
+  category        String   @default("general")
+  publishedAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  target          String   @default("NATIONAL")
+  targetCountyIds String   @default("[]")
+  marketId        String?
+  market          Market?  @relation(fields: [marketId], references: [id], onDelete: SetNull)
 }
 
 model Challenge {
@@ -152,14 +163,14 @@ model Challenge {
   tel             String
   description     String
   repostUrl       String
-  platforms       String[]
+  platforms       String                @default("[]")
   mpesaNo         String
   closingTime     DateTime
   paymentTime     DateTime
   targetCount     Int
   ranges          Json
   target          String                @default("NATIONAL")
-  targetCountyIds String[]
+  targetCountyIds String                @default("[]")
   published       Boolean               @default(false)
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
@@ -167,39 +178,38 @@ model Challenge {
 }
 
 model MpesaPayment {
-  id             String       @id @default(cuid())
-  checkoutId     String       @unique
-  status         String       // success | failed | cancelled | pending
-  resultCode     String?
-  resultDesc     String?
-  mpesaRef       String?
-  amount         Float?
-  phone          String?
-  challengeId    String?
-  challenge      Challenge?   @relation(fields: [challengeId], references: [id], onDelete: SetNull)
-  needRequestId  String?
-  needRequest    NeedRequest? @relation(fields: [needRequestId], references: [id], onDelete: SetNull)
-  createdAt      DateTime     @default(now())
+  id            String       @id @default(cuid())
+  checkoutId    String       @unique
+  status        String
+  resultCode    String?
+  resultDesc    String?
+  mpesaRef      String?
+  amount        Float?
+  phone         String?
+  challengeId   String?
+  challenge     Challenge?   @relation(fields: [challengeId], references: [id], onDelete: SetNull)
+  needRequestId String?
+  needRequest   NeedRequest? @relation(fields: [needRequestId], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
 }
 
 model NeedRequest {
-  id              String               @id @default(cuid())
+  id              String              @id @default(cuid())
   name            String
   description     String
-  commMethod      String               // sms | whatsapp | email | call
+  commMethod      String
   phone           String
   mpesaNumber     String?
   whatsappNumber  String?
-  trackingNumber  String?              @unique
-  status          String               @default("SUBMITTED")
-  // SUBMITTED | REVIEWED | PAID | IN_PROGRESS | AWAITING_FEEDBACK | DELIVERED
+  trackingNumber  String?             @unique
+  status          String              @default("SUBMITTED")
   agentComments   String?
   requestedAmount Int?
   clientFeedback  String?
   payments        MpesaPayment[]
   updates         NeedRequestUpdate[]
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
 }
 
 model NeedRequestUpdate {

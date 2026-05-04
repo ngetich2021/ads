@@ -12,9 +12,30 @@ async function requireAuth(): Promise<{ success: false; error: string } | null> 
   return null
 }
 
+async function requireAgentScope(targetCountyId: string | null): Promise<{ success: false; error: string } | null> {
+  const session = await auth()
+  if (!session?.user?.email) return { success: false, error: 'Not authenticated.' }
+  const record = await db.allowedEmail.findUnique({ where: { email: session.user.email } })
+  if (!record) return null // not in allowed list means open access — defer to caller
+  if (record.countyId === null) return null // global admin — allow all
+  if (!targetCountyId) return null // no county restriction on this resource
+  const allowed = new Set<string>(parseArr(record.countyIds))
+  if (record.countyId) allowed.add(record.countyId)
+  if (!allowed.has(targetCountyId)) {
+    return { success: false, error: 'You do not have permission to manage this county.' }
+  }
+  return null
+}
+
 function zodError(err: z.ZodError): { success: false; error: string } {
   return { success: false, error: err.issues[0].message }
 }
+
+function parseArr(v: unknown): string[] {
+  if (Array.isArray(v)) return v as string[]
+  try { return JSON.parse(String(v)) } catch { return [] }
+}
+function jsonArr(arr: string[]): string { return JSON.stringify(arr) }
 
 export type ActionResult = { success: true } | { success: false; error: string }
 
@@ -97,10 +118,9 @@ export type ItemInfo = {
 }
 
 export type AllowedEmailInfo = {
-  id: string
-  email: string
-  countyId: string | null
-  countyName: string | null
+  id: string; email: string
+  countyId: string | null; countyName: string | null
+  roles: string[]; countyIds: string[]
 }
 
 export type UserProfileInfo = {
@@ -109,6 +129,7 @@ export type UserProfileInfo = {
   fullName: string | null
   tel: string | null
   mpesaNumber: string | null
+  verificationStatus: string
 }
 
 export type DropShipItemInfo = {
@@ -189,10 +210,9 @@ export async function getAllowedEmails(): Promise<AllowedEmailInfo[]> {
     orderBy: { email: 'asc' },
   })
   return rows.map((r) => ({
-    id: r.id,
-    email: r.email,
-    countyId: r.county?.id ?? null,
-    countyName: r.county?.name ?? null,
+    id: r.id, email: r.email,
+    countyId: r.county?.id ?? null, countyName: r.county?.name ?? null,
+    roles: parseArr(r.roles), countyIds: parseArr(r.countyIds),
   }))
 }
 
@@ -200,7 +220,7 @@ export async function getUserProfile(email: string): Promise<UserProfileInfo | n
   if (!email) return null
   const p = await db.userProfile.findUnique({ where: { email } })
   if (!p) return null
-  return { id: p.id, email: p.email, fullName: p.fullName, tel: p.tel, mpesaNumber: p.mpesaNumber }
+  return { id: p.id, email: p.email, fullName: p.fullName, tel: p.tel, mpesaNumber: p.mpesaNumber, verificationStatus: p.verificationStatus }
 }
 
 /* ── Mutations ───────────────────────────────────────────────────── */
@@ -257,6 +277,10 @@ export async function upsertPrice(formData: FormData): Promise<ActionResult> {
   })
   if (!parsed.success) return zodError(parsed.error)
   const { marketId, itemId, price } = parsed.data
+  const market = await db.market.findUnique({ where: { id: marketId }, select: { countyId: true } })
+  if (!market) return { success: false, error: 'Market not found.' }
+  const scopeDenied = await requireAgentScope(market.countyId)
+  if (scopeDenied) return scopeDenied
   try {
     const existing = await db.marketPrice.findUnique({ where: { marketId_itemId: { marketId, itemId } } })
     if (existing) {
@@ -274,6 +298,10 @@ export async function upsertPrice(formData: FormData): Promise<ActionResult> {
 export async function deletePrice(id: string): Promise<ActionResult> {
   const denied = await requireAuth()
   if (denied) return denied
+  const row = await db.marketPrice.findUnique({ where: { id }, include: { market: { select: { countyId: true } } } })
+  if (!row) return { success: false, error: 'Price not found.' }
+  const scopeDenied = await requireAgentScope(row.market.countyId)
+  if (scopeDenied) return scopeDenied
   try {
     await db.marketPrice.delete({ where: { id } })
     revalidatePath('/market')
@@ -445,7 +473,7 @@ export async function getDropShipItems(): Promise<DropShipItemInfo[]> {
     tel: r.tel,
     date: r.date.toISOString(),
     target: r.target as 'NATIONAL' | 'REGIONAL',
-    targetCountyIds: r.targetCountyIds,
+    targetCountyIds: parseArr(r.targetCountyIds),
     fileName: r.fileName,
     fileMime: r.fileMime,
     fileUrl: r.fileUrl,
@@ -492,7 +520,7 @@ export async function createDropShipItem(formData: FormData): Promise<ActionResu
     } catch { /* fall back to DB storage */ }
 
     await db.dropShipItem.create({
-      data: { ...meta.data, fileName: file.name, fileData: fileUrl ? null : buf, fileMime: file.type, fileUrl },
+      data: { ...meta.data, targetCountyIds: jsonArr(meta.data.targetCountyIds), fileName: file.name, fileData: fileUrl ? null : buf, fileMime: file.type, fileUrl },
     })
     revalidatePath('/market')
     revalidatePath('/dashboard')
@@ -530,7 +558,7 @@ export async function updateDropShipItem(formData: FormData): Promise<ActionResu
       } catch { /* fall back */ }
       fileFields = { fileName: f.name, fileData: fileUrl ? null : buf, fileMime: f.type, fileUrl }
     }
-    await db.dropShipItem.update({ where: { id: id.data }, data: { ...meta.data, ...fileFields } })
+    await db.dropShipItem.update({ where: { id: id.data }, data: { ...meta.data, targetCountyIds: jsonArr(meta.data.targetCountyIds), ...fileFields } })
     revalidatePath('/market')
     revalidatePath('/dashboard')
     return { success: true }
@@ -673,9 +701,9 @@ export async function getPublicChallenges(): Promise<PublicChallengeInfo[]> {
     closingTime: r.closingTime.toISOString(),
     paymentTime: r.paymentTime.toISOString(),
     platformConfigs: normalizePlatformConfigs(r.ranges),
-    platforms: r.platforms,
+    platforms: parseArr(r.platforms),
     target: r.target as 'NATIONAL' | 'REGIONAL',
-    targetCountyIds: r.targetCountyIds,
+    targetCountyIds: parseArr(r.targetCountyIds),
     createdAt: r.createdAt.toISOString(),
     submissionCount: r._count.submissions,
   }))
@@ -697,14 +725,14 @@ export async function getChallengesAdmin(): Promise<ChallengeInfo[]> {
     tel: r.tel,
     description: r.description,
     repostUrl: r.repostUrl,
-    platforms: r.platforms,
+    platforms: parseArr(r.platforms),
     mpesaNo: r.mpesaNo,
     closingTime: r.closingTime.toISOString(),
     paymentTime: r.paymentTime.toISOString(),
     targetCount: r.targetCount,
     platformConfigs: normalizePlatformConfigs(r.ranges),
     target: r.target as 'NATIONAL' | 'REGIONAL',
-    targetCountyIds: r.targetCountyIds,
+    targetCountyIds: parseArr(r.targetCountyIds),
     published: r.published,
     createdAt: r.createdAt.toISOString(),
     submissionCount: r._count.submissions,
@@ -810,7 +838,7 @@ export async function submitNewChallenge(
 
   try {
     const challenge = await db.challenge.create({
-      data: { ...rest, ranges: platformConfigs, published: false, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
+      data: { ...rest, platforms: jsonArr(rest.platforms), targetCountyIds: jsonArr(rest.targetCountyIds), ranges: platformConfigs, published: false, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
     })
 
     // Link payment record atomically — called only after confirmed payment
@@ -837,7 +865,7 @@ export async function createChallenge(formData: FormData): Promise<ActionResult>
   const { platformConfigs, ...rest } = meta.data
   try {
     await db.challenge.create({
-      data: { ...rest, ranges: platformConfigs, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
+      data: { ...rest, platforms: jsonArr(rest.platforms), targetCountyIds: jsonArr(rest.targetCountyIds), ranges: platformConfigs, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
     })
     revalidatePath('/market')
     revalidatePath('/dashboard')
@@ -872,7 +900,7 @@ export async function updateChallenge(formData: FormData): Promise<ActionResult>
   try {
     await db.challenge.update({
       where: { id: id.data },
-      data: { ...rest, ranges: platformConfigs, published, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
+      data: { ...rest, platforms: jsonArr(rest.platforms), targetCountyIds: jsonArr(rest.targetCountyIds), ranges: platformConfigs, published, closingTime: new Date(rest.closingTime), paymentTime: new Date(rest.paymentTime) },
     })
     revalidatePath('/market')
     revalidatePath('/dashboard')
@@ -1202,6 +1230,7 @@ export type FareInfo = {
   id: string
   routeId: string
   amount: number
+  prevAmount: number | null
   transportType: string
 }
 
@@ -1211,15 +1240,31 @@ export type RouteInfo = {
   to: string
   countyId: string | null
   countyName: string | null
+  countryId: string | null
+  countryName: string | null
+  marketId: string | null
+  marketName: string | null
   fares: FareInfo[]
 }
 
 export async function getRoutes(): Promise<RouteInfo[]> {
   try {
-    const rows = await db.route.findMany({ include: { fares: true, county: true }, orderBy: { from: 'asc' } })
+    const rows = await db.route.findMany({
+      include: {
+        fares: true,
+        county: { include: { country: true } },
+        market: { include: { county: { include: { country: true } } } },
+      },
+      orderBy: { from: 'asc' },
+    })
     return rows.map((r) => ({
-      id: r.id, from: r.from, to: r.to, countyId: r.countyId, countyName: r.county?.name ?? null,
-      fares: r.fares.map((f) => ({ id: f.id, routeId: f.routeId, amount: f.amount, transportType: f.transportType })),
+      id: r.id, from: r.from, to: r.to,
+      countyId: r.countyId ?? r.market?.countyId ?? null,
+      countyName: r.county?.name ?? r.market?.county?.name ?? null,
+      countryId: r.county?.countryId ?? r.market?.county?.countryId ?? null,
+      countryName: r.county?.country?.name ?? r.market?.county?.country?.name ?? null,
+      marketId: r.marketId, marketName: r.market?.name ?? null,
+      fares: r.fares.map((f) => ({ id: f.id, routeId: f.routeId, amount: f.amount, prevAmount: f.prevAmount, transportType: f.transportType })),
     }))
   } catch { return [] }
 }
@@ -1229,10 +1274,18 @@ export async function createRoute(formData: FormData): Promise<ActionResult> {
   if (denied) return denied
   const from = String(formData.get('from') ?? '').trim()
   const to = String(formData.get('to') ?? '').trim()
+  const marketId = String(formData.get('marketId') ?? '').trim() || null
   const countyId = String(formData.get('countyId') ?? '').trim() || null
   if (!from || !to) return { success: false, error: 'From and To are required.' }
+  let effectiveCountyId = countyId
+  if (!effectiveCountyId && marketId) {
+    const mkt = await db.market.findUnique({ where: { id: marketId }, select: { countyId: true } })
+    effectiveCountyId = mkt?.countyId ?? null
+  }
+  const scopeDenied = await requireAgentScope(effectiveCountyId)
+  if (scopeDenied) return scopeDenied
   try {
-    await db.route.create({ data: { from, to, countyId } })
+    await db.route.create({ data: { from, to, marketId, countyId } })
     revalidatePath('/market'); revalidatePath('/dashboard')
     return { success: true }
   } catch { return { success: false, error: 'Route already exists or could not be created.' } }
@@ -1256,11 +1309,19 @@ export async function upsertFare(formData: FormData): Promise<ActionResult> {
   const amount = parseInt(String(formData.get('amount') ?? '0'))
   if (!routeId) return { success: false, error: 'Route is required.' }
   if (!amount || amount < 1) return { success: false, error: 'Fare amount must be a positive number.' }
+  const route = await db.route.findUnique({
+    where: { id: routeId },
+    select: { countyId: true, market: { select: { countyId: true } } },
+  })
+  const routeCountyId = route?.countyId ?? route?.market?.countyId ?? null
+  const scopeDenied = await requireAgentScope(routeCountyId)
+  if (scopeDenied) return scopeDenied
   try {
+    const existing = await db.fare.findUnique({ where: { routeId_transportType: { routeId, transportType } } })
     await db.fare.upsert({
       where: { routeId_transportType: { routeId, transportType } },
       create: { routeId, transportType, amount },
-      update: { amount },
+      update: { prevAmount: existing?.amount ?? null, amount },
     })
     revalidatePath('/market'); revalidatePath('/dashboard')
     return { success: true }
@@ -1270,6 +1331,13 @@ export async function upsertFare(formData: FormData): Promise<ActionResult> {
 export async function deleteFare(id: string): Promise<ActionResult> {
   const denied = await requireAuth()
   if (denied) return denied
+  const fare = await db.fare.findUnique({
+    where: { id },
+    select: { route: { select: { countyId: true, market: { select: { countyId: true } } } } },
+  })
+  const routeCountyId = fare?.route?.countyId ?? fare?.route?.market?.countyId ?? null
+  const scopeDenied = await requireAgentScope(routeCountyId)
+  if (scopeDenied) return scopeDenied
   try {
     await db.fare.delete({ where: { id } })
     revalidatePath('/market'); revalidatePath('/dashboard')
@@ -1277,16 +1345,28 @@ export async function deleteFare(id: string): Promise<ActionResult> {
   } catch { return { success: false, error: 'Could not delete fare.' } }
 }
 
+export async function reclaimAdminAccess(): Promise<ActionResult> {
+  const denied = await requireAuth()
+  if (denied) return denied
+  const session = await auth()
+  const email = session?.user?.email
+  if (!email) return { success: false, error: 'Not signed in.' }
+  try {
+    const record = await db.allowedEmail.findUnique({ where: { email } })
+    if (!record) return { success: false, error: 'Your email is not in the allowed list.' }
+    if (record.countyId === null) return { success: false, error: 'Already a global admin.' }
+    await db.allowedEmail.update({ where: { email }, data: { countyId: null } })
+    revalidatePath('/dashboard')
+    return { success: true }
+  } catch { return { success: false, error: 'Could not update admin status.' } }
+}
+
 /* ── News ────────────────────────────────────────────────────────── */
 
 export type NewsInfo = {
-  id: string
-  title: string
-  description: string
-  fileUrl: string | null
-  category: string
-  publishedAt: string
-  createdAt: string
+  id: string; title: string; description: string
+  fileUrl: string | null; eventTime: string; createdAt: string
+  target: string; targetCountyIds: string[]; marketId: string | null
 }
 
 export async function getNews(): Promise<NewsInfo[]> {
@@ -1294,9 +1374,23 @@ export async function getNews(): Promise<NewsInfo[]> {
     const rows = await db.news.findMany({ orderBy: { publishedAt: 'desc' } })
     return rows.map((r) => ({
       id: r.id, title: r.title, description: r.description, fileUrl: r.fileUrl,
-      category: r.category, publishedAt: r.publishedAt.toISOString(), createdAt: r.createdAt.toISOString(),
+      eventTime: r.publishedAt.toISOString(), createdAt: r.createdAt.toISOString(),
+      target: r.target, targetCountyIds: parseArr(r.targetCountyIds), marketId: r.marketId,
     }))
   } catch { return [] }
+}
+
+async function uploadNewsFile(formData: FormData): Promise<string | null> {
+  const file = formData.get('file') as File | null
+  if (!file || file.size === 0) return null
+  try {
+    const buf = Buffer.from(await file.arrayBuffer())
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    const imageExts = ['jpg','jpeg','png','gif','webp','svg']
+    const resourceType = imageExts.includes(ext ?? '') ? 'image' : 'raw'
+    const result = await uploadFile(buf, { folder: 'ads/news', resourceType, filename: file.name })
+    return result.url
+  } catch { return null }
 }
 
 export async function createNews(formData: FormData): Promise<ActionResult> {
@@ -1304,13 +1398,15 @@ export async function createNews(formData: FormData): Promise<ActionResult> {
   if (denied) return denied
   const title = String(formData.get('title') ?? '').trim()
   const description = String(formData.get('description') ?? '').trim()
-  const category = String(formData.get('category') ?? 'general').trim()
-  const publishedAt = String(formData.get('publishedAt') ?? '').trim()
-  const fileUrl = String(formData.get('fileUrl') ?? '').trim() || null
+  const eventTime = String(formData.get('eventTime') ?? '').trim()
   if (!title) return { success: false, error: 'Title is required.' }
   if (!description) return { success: false, error: 'Description is required.' }
+  const target = String(formData.get('target') ?? 'NATIONAL').trim()
+  const targetCountyIds = String(formData.get('targetCountyIds') ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const marketId = String(formData.get('marketId') ?? '').trim() || null
+  const fileUrl = await uploadNewsFile(formData)
   try {
-    await db.news.create({ data: { title, description, category, fileUrl, publishedAt: publishedAt ? new Date(publishedAt) : new Date() } })
+    await db.news.create({ data: { title, description, category: 'general', fileUrl, publishedAt: eventTime ? new Date(eventTime) : new Date(), target, targetCountyIds: jsonArr(targetCountyIds), marketId } })
     revalidatePath('/market'); revalidatePath('/dashboard')
     return { success: true }
   } catch { return { success: false, error: 'Could not create news item.' } }
@@ -1322,16 +1418,30 @@ export async function updateNews(formData: FormData): Promise<ActionResult> {
   const id = String(formData.get('id') ?? '').trim()
   const title = String(formData.get('title') ?? '').trim()
   const description = String(formData.get('description') ?? '').trim()
-  const category = String(formData.get('category') ?? 'general').trim()
-  const publishedAt = String(formData.get('publishedAt') ?? '').trim()
-  const fileUrl = String(formData.get('fileUrl') ?? '').trim() || null
+  const eventTime = String(formData.get('eventTime') ?? '').trim()
   if (!id) return { success: false, error: 'Missing news ID.' }
   if (!title) return { success: false, error: 'Title is required.' }
+  const target = String(formData.get('target') ?? 'NATIONAL').trim()
+  const targetCountyIds = String(formData.get('targetCountyIds') ?? '').split(',').map(s => s.trim()).filter(Boolean)
+  const marketId = String(formData.get('marketId') ?? '').trim() || null
+  const newFileUrl = await uploadNewsFile(formData)
+  const existingFileUrl = String(formData.get('existingFileUrl') ?? '').trim() || null
+  const fileUrl = newFileUrl ?? existingFileUrl
   try {
-    await db.news.update({ where: { id }, data: { title, description, category, fileUrl, publishedAt: publishedAt ? new Date(publishedAt) : undefined } })
+    await db.news.update({ where: { id }, data: { title, description, fileUrl, publishedAt: eventTime ? new Date(eventTime) : undefined, target, targetCountyIds: jsonArr(targetCountyIds), marketId } })
     revalidatePath('/market'); revalidatePath('/dashboard')
     return { success: true }
   } catch { return { success: false, error: 'Could not update news item.' } }
+}
+
+export async function updateAgentRoles(id: string, roles: string[], countyIds: string[]): Promise<ActionResult> {
+  const denied = await requireAuth()
+  if (denied) return denied
+  try {
+    await db.allowedEmail.update({ where: { id }, data: { roles: jsonArr(roles), countyIds: jsonArr(countyIds) } })
+    revalidatePath('/dashboard')
+    return { success: true }
+  } catch { return { success: false, error: 'Could not update roles.' } }
 }
 
 export async function deleteNews(id: string): Promise<ActionResult> {
@@ -1377,10 +1487,18 @@ export async function submitDropShipSale(formData: FormData): Promise<ActionResu
   const mpesaNumber = String(formData.get('mpesaNumber') ?? '').trim()
   const commMethod = String(formData.get('commMethod') ?? '').trim()
   const agentNotes = String(formData.get('agentNotes') ?? '').trim() || null
-  const fileUrl = String(formData.get('fileUrl') ?? '').trim() || null
   if (!dropShipItemId) return { success: false, error: 'Product ID is required.' }
   if (!mpesaNumber || !/^(07|01)\d{8}$/.test(mpesaNumber)) return { success: false, error: 'Valid M-Pesa number required (07xxxxxxxx).' }
   if (!commMethod) return { success: false, error: 'Communication method is required.' }
+  let fileUrl: string | null = null
+  const file = formData.get('file') as File | null
+  if (file && file.size > 0) {
+    try {
+      const buf = Buffer.from(await file.arrayBuffer())
+      const result = await uploadFile(buf, { folder: 'ads/sales', filename: file.name })
+      fileUrl = result.url
+    } catch { /* proceed without file */ }
+  }
   try {
     await db.dropShipSale.create({ data: { dropShipItemId, mpesaNumber, commMethod, agentNotes, fileUrl, status: 'PENDING' } })
     revalidatePath('/dashboard')
