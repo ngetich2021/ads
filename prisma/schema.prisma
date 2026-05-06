@@ -235,3 +235,55 @@ model ChallengeSubmission {
 
   @@unique([challengeId, mpesaNo, platform])
 }
+
+model AdPackage {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  price        Int
+  durationDays Int
+  playsPerHour Int
+  positions    String   @default("[\"banner\"]")
+  description  String   @default("")
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  ads          Ad[]
+}
+
+model Ad {
+  id             String      @id @default(cuid())
+  packageId      String
+  package        AdPackage   @relation(fields: [packageId], references: [id])
+  submitterName  String
+  submitterEmail String
+  submitterPhone String
+  title          String
+  description    String      @default("")
+  videoData      Bytes?
+  videoMime      String      @default("video/mp4")
+  videoUrl       String?
+  linkUrl        String?
+  durationDays    Int         @default(7)
+  target          String      @default("NATIONAL")
+  targetCountyIds String      @default("[]")
+  targetMarketIds String      @default("[]")
+  status          String      @default("PENDING")
+  adminNotes      String?
+  invoiceAmount   Int?
+  startsAt       DateTime?
+  endsAt         DateTime?
+  payments       AdPayment[]
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+}
+
+model AdPayment {
+  id         String   @id @default(cuid())
+  adId       String
+  ad         Ad       @relation(fields: [adId], references: [id], onDelete: Cascade)
+  checkoutId String   @unique
+  status     String   @default("PENDING")
+  mpesaRef   String?
+  amount     Float?
+  phone      String?
+  createdAt  DateTime @default(now())
+}

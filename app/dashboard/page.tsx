@@ -5,6 +5,7 @@ import {
   getAllData, getAllowedEmails, getUserProfile, getDropShipItems, getChallengesAdmin,
   getNeedRequests, getRoutes, getNews, getDropShipSales, getAgentVerifications,
 } from '@/app/market/actions'
+import { getAdsAdmin, getAdPackagesAdmin } from '@/app/ads/actions'
 import DashboardClient from './client'
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export default async function DashboardPage() {
   const userEmail = session.user.email ?? ''
   const [
     data, allowedEmails, userProfile, dropShipItems, challenges, needRequests,
-    routes, news, dropShipSales, agentVerifications,
+    routes, news, dropShipSales, agentVerifications, ads, adPackages,
   ] = await Promise.all([
     getAllData(),
     getAllowedEmails(),
@@ -31,6 +32,8 @@ export default async function DashboardPage() {
     getNews(),
     getDropShipSales(),
     getAgentVerifications(),
+    getAdsAdmin(),
+    getAdPackagesAdmin(),
   ])
 
   const userRecord = allowedEmails.find((e: { email: string }) => e.email === userEmail)
@@ -53,6 +56,8 @@ export default async function DashboardPage() {
       news={news}
       dropShipSales={dropShipSales}
       agentVerifications={agentVerifications}
+      ads={ads}
+      adPackages={adPackages}
       user={{
         name: session.user.name ?? 'Admin',
         email: userEmail,

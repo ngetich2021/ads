@@ -22,8 +22,10 @@ import {
 } from '@/app/market/actions'
 import NeedRequestsPanel from './NeedRequestsPanel'
 import AgentVerificationModal from './AgentVerificationModal'
+import AdsPanel from './AdsPanel'
 import { LiveTime } from '@/app/market/LiveTime'
 import { signOutAction } from '@/app/actions'
+import type { AdInfo, AdPackageInfo } from '@/app/ads/actions'
 import type {
   CountyInfo, CountryInfo, ItemInfo, PriceRow,
   AllowedEmailInfo, UserProfileInfo, DropShipItemInfo,
@@ -46,6 +48,8 @@ type Props = {
   news: NewsInfo[]
   dropShipSales: DropShipSaleInfo[]
   agentVerifications: AgentVerificationInfo[]
+  ads: AdInfo[]
+  adPackages: AdPackageInfo[]
   userCountyId: string | null
   userRoles: string[]
   userMarketIds: string[]
@@ -71,7 +75,7 @@ function deviation(price: number, prev: number | null) {
 
 export default function DashboardClient({
   countries, counties, items, prices, allowedEmails, dropShipItems, challenges, needRequests,
-  routes, news, dropShipSales, agentVerifications,
+  routes, news, dropShipSales, agentVerifications, ads, adPackages,
   userCountyId, userRoles, userMarketIds, userProfile, user,
 }: Props) {
   const router = useRouter()
@@ -111,6 +115,7 @@ export default function DashboardClient({
   const [showNewsPanel, setShowNewsPanel] = useState(false)
   const [showSalesPanel, setShowSalesPanel] = useState(false)
   const [showVerificationsPanel, setShowVerificationsPanel] = useState(false)
+  const [showAdsPanel, setShowAdsPanel] = useState(false)
   const [showMarketPanel, setShowMarketPanel] = useState(() => isAdmin || userRoles.includes('market'))
   const [showProfilePanel, setShowProfilePanel] = useState(false)
   const [showVerificationModal, setShowVerificationModal] = useState(false)
@@ -129,6 +134,7 @@ export default function DashboardClient({
     setShowNewsPanel(false)
     setShowSalesPanel(false)
     setShowVerificationsPanel(false)
+    setShowAdsPanel(false)
     setShowMarketPanel(false)
   }
 
@@ -309,6 +315,7 @@ export default function DashboardClient({
                 { key: 'news',      icon: '📰', label: 'News',      show: isAdmin || hasRole('news'),      setter: () => { closeAllPanels(); setShowNewsPanel(true);         setShowManageMenu(false) }, active: showNewsPanel },
                 { key: 'sales',     icon: '📊', label: 'Sales',     show: isAdmin,                         setter: () => { closeAllPanels(); setShowSalesPanel(true);        setShowManageMenu(false) }, active: showSalesPanel, badge: pendingSales },
                 { key: 'agents',    icon: '🪪', label: 'Agents',    show: isAdmin,                         setter: () => { closeAllPanels(); setShowVerificationsPanel(true); setShowManageMenu(false) }, active: showVerificationsPanel, badge: pendingVerifications },
+                { key: 'ads',       icon: '📺', label: 'Ads',       show: isAdmin,                         setter: () => { closeAllPanels(); setShowAdsPanel(true);           setShowManageMenu(false) }, active: showAdsPanel, badge: ads.filter(a => a.status === 'PENDING').length },
                 { key: 'access',    icon: '🔐', label: 'Access',    show: isAdmin,                         setter: () => { closeAllPanels(); setShowEmailPanel(true);        setShowManageMenu(false) }, active: showEmailPanel },
               ].filter(item => item.show).map(item => (
                 <button key={item.key} onClick={item.setter}
@@ -353,6 +360,12 @@ export default function DashboardClient({
         )}
         {isAdmin && showVerificationsPanel && (
           <AgentVerificationsPanel verifications={agentVerifications} onDone={() => router.refresh()} />
+        )}
+        {isAdmin && showAdsPanel && (
+          <div className="rounded-2xl border border-gray-200 bg-white shadow-sm p-5 sm:p-6">
+            <h2 className="font-bold text-gray-800 text-lg mb-4">Ad Management</h2>
+            <AdsPanel ads={ads} packages={adPackages} onRefresh={() => router.refresh()} />
+          </div>
         )}
         {isAdmin && showEmailPanel && (
           <EmailAccessPanel emails={allowedEmails} counties={counties} onDone={() => router.refresh()} />

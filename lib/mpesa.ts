@@ -36,12 +36,12 @@ function normalizePhone(phone: string): string {
   return `254${digits}`
 }
 
-export async function stkPush(phone: string, amount: number, ref: string) {
+export async function stkPush(phone: string, amount: number, ref: string, callbackUrl?: string) {
   const tok = await token()
   const ts = timestamp()
   const pw = password(ts)
   const sc = process.env.MPESA_SHORTCODE!
-  const callbackUrl = `${process.env.NEXT_PUBLIC_APP_URL}/api/mpesa/callback`
+  callbackUrl = callbackUrl ?? `${process.env.NEXT_PUBLIC_APP_URL}/api/mpesa/callback`
 
   const res = await fetch(`${BASE}/mpesa/stkpush/v1/processrequest`, {
     method: 'POST',

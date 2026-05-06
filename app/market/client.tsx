@@ -7,6 +7,10 @@ import NeedTab from './NeedTab'
 import FaresTab from './FaresTab'
 import NewsTab from './NewsTab'
 import DropShipSalesTab from './DropShipSalesTab'
+import AdBanner from '@/app/components/AdBanner'
+import AdSidebar from '@/app/components/AdSidebar'
+import AdSticky from '@/app/components/AdSticky'
+import { AdProvider } from '@/app/components/AdContext'
 import type { CountryInfo, CountyInfo, ItemInfo, PriceRow, DropShipItemInfo, PublicChallengeInfo, RouteInfo, NewsInfo } from './actions'
 
 function itemBadgeColor(name: string) {
@@ -38,6 +42,9 @@ type Props = {
   routes: RouteInfo[]
   news: NewsInfo[]
 }
+
+const selectClass =
+  'rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition-colors disabled:opacity-50 shadow-sm'
 
 /* ── Searchable product filter ───────────────────────────────────── */
 
@@ -233,7 +240,8 @@ export default function MarketClient({ countries, counties, items, prices, dropS
   const isEmpty = prices.length === 0
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
+    <AdProvider countyId={selectedCountyId} marketId={selectedMarketId}>
+    <div className="min-h-screen bg-gray-50 flex flex-col pb-40 overflow-x-hidden">
       {/* Header */}
       <header className="bg-linear-to-r from-indigo-800 to-violet-800 shadow-lg">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
@@ -243,11 +251,21 @@ export default function MarketClient({ countries, counties, items, prices, dropS
               Market<span className="text-violet-200">Prices</span>
             </span>
           </div>
-          <a href="/login" className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/25 transition-colors">
-            Sign in to manage
-          </a>
+          <div className="flex items-center gap-2">
+            <a href="/ads/submit" className="flex items-center gap-1.5 rounded-lg bg-white/10 border border-white/20 px-3 py-2 text-xs font-semibold text-white hover:bg-white/20 transition-colors">
+              Advertise
+            </a>
+            <a href="/login" className="flex items-center gap-1.5 rounded-lg bg-white/15 border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/25 transition-colors">
+              Sign in to manage
+            </a>
+          </div>
         </div>
       </header>
+
+      {/* Top banner ad — hidden on mobile (sm), visible md+ */}
+      <div className="hidden md:block">
+        <AdBanner />
+      </div>
 
       {/* Tab navigation */}
       <div className="max-w-6xl w-full mx-auto px-0 sm:px-6 pt-4 sm:pt-6">
@@ -305,8 +323,10 @@ export default function MarketClient({ countries, counties, items, prices, dropS
         </div>
       </div>
 
-      {/* Main content */}
-      <main className="max-w-6xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-6 flex-1">
+      {/* Main content + sidebar */}
+      <div className="max-w-6xl w-full mx-auto px-4 sm:px-6 py-5 sm:py-6 flex-1">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] lg:grid-cols-[1fr_260px] xl:grid-cols-[1fr_300px] gap-4 md:gap-5 lg:gap-6 items-start">
+          <main>
 
         {/* Commodities tab */}
         {activeTab === 'commodities' && (
@@ -446,15 +466,24 @@ export default function MarketClient({ countries, counties, items, prices, dropS
             selectedMarketId={selectedMarketId}
           />
         )}
-      </main>
+          </main>
+
+          {/* Right sidebar ads — visible md+ */}
+          <aside className="hidden md:block sticky top-4">
+            <AdSidebar />
+          </aside>
+        </div>
+      </div>
 
       {/* Footer */}
       <footer className="border-t border-gray-200 bg-white py-5 text-center text-xs text-gray-400">
         Developed with ❤ by Kwenik Developers · 0704876954
       </footer>
+
+      {/* Sticky bottom ad */}
+      <AdSticky />
     </div>
+    </AdProvider>
   )
 }
 
-const selectClass =
-  'rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-violet-400 focus:outline-none focus:ring-2 focus:ring-violet-100 transition-colors disabled:opacity-50 shadow-sm'
